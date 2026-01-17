@@ -10,8 +10,9 @@ This Android app:
 ## Setup
 1) Open `android/` in Android Studio.
 2) Ensure you have the Viture SDK AAR:
-   - Download `viture_android_sdk_v1.0.7.tar.xz` and extract `aar/VITURE-SDK-1.0.7.aar`
-   - Place it at `android/app/libs/VITURE-SDK-1.0.7.aar`
+   - Option A (recommended): copy from this repo’s `VitureSDK/aar/VITURE-SDK-1.0.7.aar`
+   - Option B: download `viture_android_sdk_v1.0.7.tar.xz` and extract `aar/VITURE-SDK-1.0.7.aar`
+   - Place it at `android/app/libs/VITURE-SDK-1.0.7.aar` (not committed)
 3) Connect Viture glasses via USB‑C.
 
 ## Build Variants
@@ -23,6 +24,7 @@ This project has 2 product flavors:
 - Launch the app on the phone (Pixel 8a target).
 - The phone UI is a remote controller.
 - The HUD should appear on the Viture display when detected as an external display.
+- The remote includes Viture controls (IMU on/off, 3D on/off, IMU frequency, “HUD Defaults”).
 
 ## CLI Build (no Android Studio)
 Prereqs:
