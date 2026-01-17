@@ -39,6 +39,15 @@ class HeadPoseState:
     last_seen_monotonic: float
 
 
+@dataclass(slots=True)
+class AndroidClientInfo:
+    v: int | None
+    client: str | None
+    model: str | None
+    sdk_int: int | None
+    last_seen_monotonic: float
+
+
 class HudServer:
     def __init__(self, host: str, port: int, log_level: str = "INFO") -> None:
         setup_logging(log_level)
@@ -49,6 +58,7 @@ class HudServer:
 
         self._android_events: set[ServerConnection] = set()
         self._android_stt: set[ServerConnection] = set()
+        self._android_info: dict[ServerConnection, AndroidClientInfo] = {}
 
         self._esp32_by_role: dict[str, Esp32AudioState] = {}
         self._head_pose: HeadPoseState | None = None
@@ -104,6 +114,13 @@ class HudServer:
     async def _handle_android_events(self, conn: ServerConnection) -> None:
         self._android_events.add(conn)
         self._logger.info("Android /events connected from %s", conn.remote_address)
+        self._android_info[conn] = AndroidClientInfo(
+            v=None,
+            client=None,
+            model=None,
+            sdk_int=None,
+            last_seen_monotonic=asyncio.get_running_loop().time(),
+        )
         try:
             await conn.send(dumps({"type": "status", "server": "connected"}))
             async for msg in conn:
@@ -113,8 +130,24 @@ class HudServer:
                     obj = loads(msg)
                 except Exception:
                     continue
+                info = self._android_info.get(conn)
+                if info is not None:
+                    info.last_seen_monotonic = asyncio.get_running_loop().time()
                 msg_type = obj.get("type")
-                if msg_type == "head_pose":
+                if msg_type == "hello":
+                    if info is not None:
+                        try:
+                            if obj.get("v") is not None:
+                                info.v = int(obj.get("v"))
+                            if obj.get("client") is not None:
+                                info.client = str(obj.get("client"))
+                            if obj.get("model") is not None:
+                                info.model = str(obj.get("model"))
+                            if obj.get("sdkInt") is not None:
+                                info.sdk_int = int(obj.get("sdkInt"))
+                        except Exception:
+                            continue
+                elif msg_type == "head_pose":
                     try:
                         yaw = float(obj.get("yaw"))
                         pitch = float(obj.get("pitch"))
@@ -145,6 +178,7 @@ class HudServer:
                         self._keywords = cleaned[:50]
         finally:
             self._android_events.discard(conn)
+            self._android_info.pop(conn, None)
             self._logger.info("Android /events disconnected from %s", conn.remote_address)
 
     async def _handle_android_stt(self, conn: ServerConnection) -> None:
@@ -293,6 +327,7 @@ class HudServer:
     async def _status_loop(self) -> None:
         while True:
             await asyncio.sleep(1.0)
+            now = asyncio.get_running_loop().time()
             esp32 = {
                 role: {
                     "deviceId": s.device_id,
@@ -313,11 +348,23 @@ class HudServer:
                     "pitchDeg": self._head_pose.pitch_deg,
                     "rollDeg": self._head_pose.roll_deg,
                 }
+
+            android_clients: list[dict[str, Any]] = []
+            for info in list(self._android_info.values()):
+                android_clients.append(
+                    {
+                        "v": info.v,
+                        "client": info.client,
+                        "model": info.model,
+                        "sdkInt": info.sdk_int,
+                        "ageS": float(max(0.0, now - info.last_seen_monotonic)),
+                    }
+                )
             await self._broadcast_events(
                 {
                     "type": "status",
                     "server": "ok",
-                    "android": {"eventsClients": len(self._android_events), "sttClients": len(self._android_stt)},
+                    "android": {"eventsClients": len(self._android_events), "sttClients": len(self._android_stt), "clients": android_clients},
                     "esp32": esp32,
                     "headPose": head_pose,
                 }
