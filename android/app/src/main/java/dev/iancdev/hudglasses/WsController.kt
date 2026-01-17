@@ -6,7 +6,10 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+import kotlin.math.min
 
 class WsController(
     private val onEvents: (HudEvent) -> Unit,
@@ -15,33 +18,92 @@ class WsController(
         .pingInterval(10, TimeUnit.SECONDS)
         .build()
 
+    private val scheduler = Executors.newSingleThreadScheduledExecutor()
+    private var reconnectFuture: ScheduledFuture<*>? = null
+    private var reconnectAttempts: Int = 0
+    @Volatile private var shouldConnect: Boolean = false
+    @Volatile private var targetBaseUrl: String? = null
+
     private var eventsSocket: WebSocket? = null
     private var sttSocket: WebSocket? = null
+    @Volatile private var eventsOpen: Boolean = false
+    @Volatile private var sttOpen: Boolean = false
 
     fun connect(serverBaseUrl: String) {
-        disconnect()
-        val base = serverBaseUrl.removeSuffix("/")
-        connectEvents("$base/events")
-        connectStt("$base/stt")
+        targetBaseUrl = serverBaseUrl.removeSuffix("/")
+        shouldConnect = true
+        reconnectAttempts = 0
+        reconnectFuture?.cancel(false)
+        closeSockets()
+        openSockets()
     }
 
     fun disconnect() {
-        eventsSocket?.close(1000, "bye")
-        sttSocket?.close(1000, "bye")
-        eventsSocket = null
-        sttSocket = null
+        shouldConnect = false
+        targetBaseUrl = null
+        reconnectAttempts = 0
+        reconnectFuture?.cancel(false)
+        closeSockets()
         HudStore.update { it.copy(eventsConnected = false, sttConnected = false) }
+    }
+
+    fun close() {
+        disconnect()
+        scheduler.shutdownNow()
     }
 
     fun sendOnEventsChannel(json: JSONObject) {
         eventsSocket?.send(json.toString())
     }
 
+    private fun openSockets() {
+        val base = targetBaseUrl ?: return
+        connectEvents("$base/events")
+        connectStt("$base/stt")
+    }
+
+    private fun closeSockets() {
+        eventsSocket?.close(1000, "bye")
+        sttSocket?.close(1000, "bye")
+        eventsSocket = null
+        sttSocket = null
+        eventsOpen = false
+        sttOpen = false
+    }
+
+    private fun scheduleReconnect() {
+        val base = targetBaseUrl ?: return
+        if (!shouldConnect) return
+        if (reconnectFuture?.isDone == false) return
+
+        val delayMs = min(5000L, 500L * (1L shl min(reconnectAttempts, 4)))
+        reconnectAttempts += 1
+        reconnectFuture = scheduler.schedule(
+            {
+                if (!shouldConnect) return@schedule
+                closeSockets()
+                openSockets()
+            },
+            delayMs,
+            TimeUnit.MILLISECONDS,
+        )
+        HudStore.update { it.copy(eventsConnected = false, sttConnected = false) }
+    }
+
+    private fun onMaybeFullyConnected() {
+        if (eventsOpen && sttOpen) {
+            reconnectAttempts = 0
+            reconnectFuture?.cancel(false)
+        }
+    }
+
     private fun connectEvents(url: String) {
         val req = Request.Builder().url(url).build()
         eventsSocket = client.newWebSocket(req, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                eventsOpen = true
                 HudStore.update { it.copy(eventsConnected = true) }
+                onMaybeFullyConnected()
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -53,11 +115,15 @@ class WsController(
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                eventsOpen = false
                 HudStore.update { it.copy(eventsConnected = false) }
+                scheduleReconnect()
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                eventsOpen = false
                 HudStore.update { it.copy(eventsConnected = false) }
+                scheduleReconnect()
             }
         })
     }
@@ -66,7 +132,9 @@ class WsController(
         val req = Request.Builder().url(url).build()
         sttSocket = client.newWebSocket(req, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                sttOpen = true
                 HudStore.update { it.copy(sttConnected = true) }
+                onMaybeFullyConnected()
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -78,11 +146,15 @@ class WsController(
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                sttOpen = false
                 HudStore.update { it.copy(sttConnected = false) }
+                scheduleReconnect()
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                sttOpen = false
                 HudStore.update { it.copy(sttConnected = false) }
+                scheduleReconnect()
             }
         })
     }

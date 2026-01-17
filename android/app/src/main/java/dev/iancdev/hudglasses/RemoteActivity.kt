@@ -87,7 +87,7 @@ class RemoteActivity : ComponentActivity() {
         super.onDestroy()
         displayManager.unregisterDisplayListener(displayListener)
         vitureImuController.stop()
-        wsController.disconnect()
+        wsController.close()
         wristbandController.disconnect()
         hudPresentation?.dismiss()
         hudPresentation = null
