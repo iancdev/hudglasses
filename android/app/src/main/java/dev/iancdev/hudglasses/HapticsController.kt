@@ -8,7 +8,10 @@ import android.os.VibratorManager
 import org.json.JSONObject
 import kotlin.math.abs
 
-class HapticsController(context: Context) {
+class HapticsController(
+    context: Context,
+    private val wristbandController: WristbandController? = null,
+) {
     private val vibrator: Vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         val vm = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
         vm.defaultVibrator
@@ -29,8 +32,14 @@ class HapticsController(context: Context) {
 
     private fun handleEvents(obj: JSONObject) {
         when (obj.optString("type")) {
-            "alarm.fire" -> if (obj.optString("state") == "started") buzz(pattern = longArrayOf(0, 800, 200, 800))
-            "alarm.car_horn" -> if (obj.optString("state") == "started") buzz(pattern = longArrayOf(0, 200, 100, 200, 100, 200))
+            "alarm.fire" -> if (obj.optString("state") == "started") {
+                wristbandController?.send(patternId = 10, intensity0to1 = 1.0f, durationMs = 1500)
+                buzz(pattern = longArrayOf(0, 800, 200, 800))
+            }
+            "alarm.car_horn" -> if (obj.optString("state") == "started") {
+                wristbandController?.send(patternId = 11, intensity0to1 = 0.8f, durationMs = 800)
+                buzz(pattern = longArrayOf(0, 200, 100, 200, 100, 200))
+            }
             "direction.ui" -> {
                 val intensity = obj.optDouble("intensity", 0.0).toFloat()
                 val direction = obj.optDouble("directionDeg", 0.0).toFloat()
@@ -38,7 +47,13 @@ class HapticsController(context: Context) {
                 if (abs(direction - lastDirectionDeg) < 25f) return
                 lastDirectionDeg = direction
                 // Simple directional buzz: one pulse for left, two for right.
-                if (direction < 0) buzz(pattern = longArrayOf(0, 120)) else buzz(pattern = longArrayOf(0, 80, 80, 80))
+                if (direction < 0) {
+                    wristbandController?.send(patternId = 1, intensity0to1 = intensity, durationMs = 250)
+                    buzz(pattern = longArrayOf(0, 120))
+                } else {
+                    wristbandController?.send(patternId = 2, intensity0to1 = intensity, durationMs = 250)
+                    buzz(pattern = longArrayOf(0, 80, 80, 80))
+                }
             }
         }
     }
@@ -62,4 +77,3 @@ class HapticsController(context: Context) {
         }
     }
 }
-

@@ -6,6 +6,10 @@ data class HudState(
     val sttConnected: Boolean = false,
     val esp32ConnectedLeft: Boolean = false,
     val esp32ConnectedRight: Boolean = false,
+    val wristbandConnected: Boolean = false,
+    val wristbandNamePrefix: String = "HUD-Wristband",
+    val wristbandServiceUuid: String = "0000feed-0000-1000-8000-00805f9b34fb",
+    val wristbandCommandCharUuid: String = "0000beef-0000-1000-8000-00805f9b34fb",
     val directionDeg: Float = 0f,
     val intensity: Float = 0f,
     val radarX: Float = 0f,
@@ -17,4 +21,3 @@ data class HudState(
     val subtitlePartial: String = "",
     val subtitleLines: List<String> = emptyList(),
 )
-
