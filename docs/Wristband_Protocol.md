@@ -36,6 +36,7 @@ Android writes exactly 4 bytes (little endian) to the command characteristic:
 - `2`: direction right
 - `10`: fire alarm
 - `11`: car horn
+- `20`: keyword / phrase alert
 
 You can support more IDs as desired; unknown IDs may be ignored.
 
@@ -47,4 +48,3 @@ You can support more IDs as desired; unknown IDs may be ignored.
 ## 6) Notes / Open Items
 - If you prefer different UUIDs, tell the Android team and we’ll update the app config fields.
 - If you want to include battery reporting, we can add a read characteristic (optional).
-
