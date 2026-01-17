@@ -127,8 +127,10 @@ Purpose: keep subtitle latency as low as possible and avoid contention with even
 **Server → Android (transcript downstream)**
 - Messages include:
   - `partial`: latest partial text
+    - optional `deltaWords`: list of newly appended words (best-effort)
   - `final`: committed/final text
-  - optional `deltaWords`: words appended since last update (Phase 1.5 if needed)
+  - `status`: connection/session status (e.g., `stt=connected`, `stt=session_started`)
+  - `error`: STT errors (auth/quota/rate-limit/etc.)
 
 ### 5.2 `/events` (All other events)
 Server → Android:
