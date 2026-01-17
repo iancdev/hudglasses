@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -70,8 +71,19 @@ class RemoteActivity : ComponentActivity() {
             onPose = { pose ->
                 wsController.sendOnEventsChannel(pose.toJson())
             },
+            onSdkState = { sdk ->
+                runOnUiThread {
+                    HudStore.update {
+                        it.copy(
+                            vitureInitResult = sdk.initResult ?: it.vitureInitResult,
+                            vitureImuState = sdk.imuState ?: it.vitureImuState,
+                            viture3dState = sdk.stereo3dState ?: it.viture3dState,
+                            vitureImuFrequency = sdk.imuFrequency ?: it.vitureImuFrequency,
+                        )
+                    }
+                }
+            },
         )
-        vitureImuController.start()
 
         setContent {
             MaterialTheme {
@@ -80,6 +92,14 @@ class RemoteActivity : ComponentActivity() {
                     onDisconnect = { wsController.disconnect() },
                     onConnectWristband = { connectWristband() },
                     onDisconnectWristband = { wristbandController.disconnect() },
+                    onSetVitureImu = { enabled -> vitureImuController.setImuEnabled(enabled) },
+                    onSetViture3d = { enabled -> vitureImuController.set3dEnabled(enabled) },
+                    onSetVitureImuFreq = { mode -> vitureImuController.setImuFrequency(mode) },
+                    onApplyVitureHudDefaults = {
+                        vitureImuController.set3dEnabled(false)
+                        vitureImuController.setImuEnabled(true)
+                        vitureImuController.setImuFrequency(0) // 60Hz
+                    },
                     onApplyThresholds = { rms, fire, horn ->
                         HudStore.update { it.copy(alarmRmsThreshold = rms, fireRatioThreshold = fire, hornRatioThreshold = horn) }
                         wsController.sendOnEventsChannel(
@@ -109,10 +129,21 @@ class RemoteActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        vitureImuController.start()
+    }
+
+    override fun onPause() {
+        vitureImuController.stop()
+        super.onPause()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         displayManager.unregisterDisplayListener(displayListener)
         vitureImuController.stop()
+        vitureImuController.release()
         wsController.close()
         wristbandController.disconnect()
         hudPresentation?.dismiss()
@@ -165,6 +196,10 @@ private fun RemoteUi(
     onDisconnect: () -> Unit,
     onConnectWristband: () -> Unit,
     onDisconnectWristband: () -> Unit,
+    onSetVitureImu: (Boolean) -> Unit,
+    onSetViture3d: (Boolean) -> Unit,
+    onSetVitureImuFreq: (Int) -> Unit,
+    onApplyVitureHudDefaults: () -> Unit,
     onApplyThresholds: (Float, Float, Float) -> Unit,
     onApplyKeywords: (String, Float) -> Unit,
 ) {
@@ -182,6 +217,33 @@ private fun RemoteUi(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("HUD Glasses Remote", style = MaterialTheme.typography.headlineSmall)
+
+        Text(
+            "Viture: init=${vitureInitLabel(state.vitureInitResult)} " +
+                "imu=${vitureStateLabel(state.vitureImuState)} " +
+                "3d=${vitureStateLabel(state.viture3dState)} " +
+                "freq=${vitureImuFrequencyLabel(state.vitureImuFrequency)}"
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("IMU")
+            Switch(
+                checked = state.vitureImuState == 1,
+                onCheckedChange = onSetVitureImu,
+            )
+            Text("3D")
+            Switch(
+                checked = state.viture3dState == 1,
+                onCheckedChange = onSetViture3d,
+            )
+            Button(onClick = onApplyVitureHudDefaults) { Text("HUD Defaults") }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("IMU Hz")
+            Button(onClick = { onSetVitureImuFreq(0) }) { Text("60") }
+            Button(onClick = { onSetVitureImuFreq(1) }) { Text("90") }
+            Button(onClick = { onSetVitureImuFreq(2) }) { Text("120") }
+            Button(onClick = { onSetVitureImuFreq(3) }) { Text("240") }
+        }
 
         OutlinedTextField(
             value = url,
@@ -296,5 +358,36 @@ private fun RemoteUi(
         Text("Lines: ${state.subtitleLines.takeLast(3).joinToString(" | ")}")
 
         Text("Direction: ${"%.1f".format(state.directionDeg)}°  intensity=${"%.2f".format(state.intensity)}")
+    }
+}
+
+private fun vitureInitLabel(code: Int?): String {
+    return when (code) {
+        null -> "unknown"
+        0 -> "success"
+        -1 -> "no_device"
+        -2 -> "no_permission"
+        -3 -> "unknown_error"
+        else -> "code_$code"
+    }
+}
+
+private fun vitureStateLabel(code: Int?): String {
+    return when (code) {
+        null -> "unknown"
+        1 -> "on"
+        0 -> "off"
+        else -> "err_$code"
+    }
+}
+
+private fun vitureImuFrequencyLabel(code: Int?): String {
+    return when (code) {
+        null -> "unknown"
+        0 -> "60hz"
+        1 -> "90hz"
+        2 -> "120hz"
+        3 -> "240hz"
+        else -> "code_$code"
     }
 }
