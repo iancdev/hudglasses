@@ -516,7 +516,7 @@ class HudServer:
 
     def _stabilize_direction(self, raw_direction_deg: float) -> float:
         pose = self._head_pose
-        if pose is None:
+        if pose is None or (asyncio.get_running_loop().time() - pose.last_seen_monotonic) > 1.0:
             self._world_direction_deg = None
             return raw_direction_deg
 
