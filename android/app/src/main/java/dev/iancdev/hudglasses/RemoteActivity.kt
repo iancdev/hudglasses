@@ -14,10 +14,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -86,45 +88,47 @@ class RemoteActivity : ComponentActivity() {
         )
 
         setContent {
-            MaterialTheme {
-                RemoteUi(
-                    onConnect = { wsController.connect(HudStore.state.value.serverUrl) },
-                    onDisconnect = { wsController.disconnect() },
-                    onConnectWristband = { connectWristband() },
-                    onDisconnectWristband = { wristbandController.disconnect() },
-                    onSetVitureImu = { enabled -> vitureImuController.setImuEnabled(enabled) },
-                    onSetViture3d = { enabled -> vitureImuController.set3dEnabled(enabled) },
-                    onSetVitureImuFreq = { mode -> vitureImuController.setImuFrequency(mode) },
-                    onApplyVitureHudDefaults = {
-                        vitureImuController.set3dEnabled(false)
-                        vitureImuController.setImuEnabled(true)
-                        vitureImuController.setImuFrequency(0) // 60Hz
-                    },
-                    onApplyThresholds = { rms, fire, horn ->
-                        HudStore.update { it.copy(alarmRmsThreshold = rms, fireRatioThreshold = fire, hornRatioThreshold = horn) }
-                        wsController.sendOnEventsChannel(
-                            JSONObject()
-                                .put("type", "config.update")
-                                .put("alarmRmsThreshold", rms)
-                                .put("fireRatioThreshold", fire)
-                                .put("hornRatioThreshold", horn)
-                        )
-                    },
-                    onApplyKeywords = { keywordsCsv, cooldownS ->
-                        HudStore.update { it.copy(keywordsCsv = keywordsCsv, keywordCooldownS = cooldownS) }
-                        val keywords = keywordsCsv
-                            .split(",", "\n")
-                            .map { it.trim() }
-                            .filter { it.isNotEmpty() }
-                            .take(50)
-                        wsController.sendOnEventsChannel(
-                            JSONObject()
-                                .put("type", "config.update")
-                                .put("keywordCooldownS", cooldownS)
-                                .put("keywords", JSONArray(keywords))
-                        )
-                    },
-                )
+            MaterialTheme(colorScheme = darkColorScheme()) {
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    RemoteUi(
+                        onConnect = { wsController.connect(HudStore.state.value.serverUrl) },
+                        onDisconnect = { wsController.disconnect() },
+                        onConnectWristband = { connectWristband() },
+                        onDisconnectWristband = { wristbandController.disconnect() },
+                        onSetVitureImu = { enabled -> vitureImuController.setImuEnabled(enabled) },
+                        onSetViture3d = { enabled -> vitureImuController.set3dEnabled(enabled) },
+                        onSetVitureImuFreq = { mode -> vitureImuController.setImuFrequency(mode) },
+                        onApplyVitureHudDefaults = {
+                            vitureImuController.set3dEnabled(false)
+                            vitureImuController.setImuEnabled(true)
+                            vitureImuController.setImuFrequency(0) // 60Hz
+                        },
+                        onApplyThresholds = { rms, fire, horn ->
+                            HudStore.update { it.copy(alarmRmsThreshold = rms, fireRatioThreshold = fire, hornRatioThreshold = horn) }
+                            wsController.sendOnEventsChannel(
+                                JSONObject()
+                                    .put("type", "config.update")
+                                    .put("alarmRmsThreshold", rms)
+                                    .put("fireRatioThreshold", fire)
+                                    .put("hornRatioThreshold", horn)
+                            )
+                        },
+                        onApplyKeywords = { keywordsCsv, cooldownS ->
+                            HudStore.update { it.copy(keywordsCsv = keywordsCsv, keywordCooldownS = cooldownS) }
+                            val keywords = keywordsCsv
+                                .split(",", "\n")
+                                .map { it.trim() }
+                                .filter { it.isNotEmpty() }
+                                .take(50)
+                            wsController.sendOnEventsChannel(
+                                JSONObject()
+                                    .put("type", "config.update")
+                                    .put("keywordCooldownS", cooldownS)
+                                    .put("keywords", JSONArray(keywords))
+                            )
+                        },
+                    )
+                }
             }
         }
     }
