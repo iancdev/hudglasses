@@ -3,8 +3,8 @@ package dev.iancdev.hudglasses
 import android.content.Context
 import android.hardware.display.DisplayManager
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -27,6 +27,9 @@ import androidx.compose.ui.unit.dp
 class RemoteActivity : ComponentActivity() {
     private var hudPresentation: HudPresentation? = null
     private lateinit var displayManager: DisplayManager
+    private lateinit var wsController: WsController
+    private lateinit var vitureImuController: VitureImuController
+    private lateinit var hapticsController: HapticsController
 
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) = refreshHudDisplay()
@@ -42,9 +45,24 @@ class RemoteActivity : ComponentActivity() {
 
         refreshHudDisplay()
 
+        hapticsController = HapticsController(this)
+        wsController = WsController(
+            onEvents = { evt -> hapticsController.onEvent(evt) },
+        )
+        vitureImuController = VitureImuController(
+            context = this,
+            onPose = { pose ->
+                wsController.sendOnEventsChannel(pose.toJson())
+            },
+        )
+        vitureImuController.start()
+
         setContent {
             MaterialTheme {
-                RemoteUi()
+                RemoteUi(
+                    onConnect = { wsController.connect(HudStore.state.value.serverUrl) },
+                    onDisconnect = { wsController.disconnect() },
+                )
             }
         }
     }
@@ -52,6 +70,8 @@ class RemoteActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         displayManager.unregisterDisplayListener(displayListener)
+        vitureImuController.stop()
+        wsController.disconnect()
         hudPresentation?.dismiss()
         hudPresentation = null
     }
@@ -73,7 +93,10 @@ class RemoteActivity : ComponentActivity() {
 }
 
 @Composable
-private fun RemoteUi() {
+private fun RemoteUi(
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit,
+) {
     val state by HudStore.state.collectAsState()
     var url by remember(state.serverUrl) { mutableStateOf(state.serverUrl) }
 
@@ -94,6 +117,12 @@ private fun RemoteUi() {
             Button(onClick = { HudStore.update { it.copy(serverUrl = url) } }) {
                 Text("Set URL")
             }
+            Button(onClick = onConnect) {
+                Text("Connect")
+            }
+            Button(onClick = onDisconnect) {
+                Text("Disconnect")
+            }
             Text("Events: ${if (state.eventsConnected) "connected" else "disconnected"}")
             Text("STT: ${if (state.sttConnected) "connected" else "disconnected"}")
         }
@@ -107,10 +136,6 @@ private fun RemoteUi() {
         Text("Partial: ${state.subtitlePartial}")
         Text("Lines: ${state.subtitleLines.takeLast(3).joinToString(\" | \")}")
 
-        Text(
-            "Note: networking + Viture IMU integration is wired up in the next iteration.",
-            style = MaterialTheme.typography.bodySmall,
-        )
+        Text("Direction: ${"%.1f".format(state.directionDeg)}°  intensity=${"%.2f".format(state.intensity)}")
     }
 }
-
