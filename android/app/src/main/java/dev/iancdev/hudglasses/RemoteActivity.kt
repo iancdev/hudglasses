@@ -26,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import org.json.JSONObject
 import java.util.UUID
 
 class RemoteActivity : ComponentActivity() {
@@ -78,6 +79,16 @@ class RemoteActivity : ComponentActivity() {
                     onDisconnect = { wsController.disconnect() },
                     onConnectWristband = { connectWristband() },
                     onDisconnectWristband = { wristbandController.disconnect() },
+                    onApplyThresholds = { rms, fire, horn ->
+                        HudStore.update { it.copy(alarmRmsThreshold = rms, fireRatioThreshold = fire, hornRatioThreshold = horn) }
+                        wsController.sendOnEventsChannel(
+                            JSONObject()
+                                .put("type", "config.update")
+                                .put("alarmRmsThreshold", rms)
+                                .put("fireRatioThreshold", fire)
+                                .put("hornRatioThreshold", horn)
+                        )
+                    },
                 )
             }
         }
@@ -139,10 +150,14 @@ private fun RemoteUi(
     onDisconnect: () -> Unit,
     onConnectWristband: () -> Unit,
     onDisconnectWristband: () -> Unit,
+    onApplyThresholds: (Float, Float, Float) -> Unit,
 ) {
     val state by HudStore.state.collectAsState()
     var url by remember(state.serverUrl) { mutableStateOf(state.serverUrl) }
     var wbPrefix by remember(state.wristbandNamePrefix) { mutableStateOf(state.wristbandNamePrefix) }
+    var rmsStr by remember(state.alarmRmsThreshold) { mutableStateOf(state.alarmRmsThreshold.toString()) }
+    var fireStr by remember(state.fireRatioThreshold) { mutableStateOf(state.fireRatioThreshold.toString()) }
+    var hornStr by remember(state.hornRatioThreshold) { mutableStateOf(state.hornRatioThreshold.toString()) }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -191,6 +206,41 @@ private fun RemoteUi(
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Button(onClick = onConnectWristband) { Text("Connect Wristband") }
             Button(onClick = onDisconnectWristband) { Text("Disconnect Wristband") }
+        }
+
+        Text("Alarm thresholds (server tuning)")
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = rmsStr,
+                onValueChange = { rmsStr = it },
+                label = { Text("RMS") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedTextField(
+                value = fireStr,
+                onValueChange = { fireStr = it },
+                label = { Text("Fire ratio") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedTextField(
+                value = hornStr,
+                onValueChange = { hornStr = it },
+                label = { Text("Horn ratio") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Button(
+            onClick = {
+                val rms = rmsStr.toFloatOrNull() ?: state.alarmRmsThreshold
+                val fire = fireStr.toFloatOrNull() ?: state.fireRatioThreshold
+                val horn = hornStr.toFloatOrNull() ?: state.hornRatioThreshold
+                onApplyThresholds(rms, fire, horn)
+            }
+        ) {
+            Text("Apply Thresholds")
         }
 
         Text("Fire alarm: ${state.fireAlarm}")
