@@ -1,2 +1,8 @@
 #codex cli
 .codex
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
