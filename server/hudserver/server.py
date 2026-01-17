@@ -11,6 +11,7 @@ import numpy as np
 import websockets
 from websockets.asyncio.server import ServerConnection
 
+from hudserver.audio_features import band_power_ratio, pcm16le_bytes_to_float32, rms as rms_value
 from hudserver.logging_utils import setup_logging
 from hudserver.protocol import dumps, loads
 from hudserver.elevenlabs_stt import ElevenLabsConfig, ElevenLabsRealtimeStt
@@ -41,6 +42,7 @@ class HudServer:
         self._android_stt: set[ServerConnection] = set()
 
         self._esp32_by_role: dict[str, Esp32AudioState] = {}
+        self._analysis_left_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=500)  # ~10s at 20ms frames
 
         self._stop = asyncio.Event()
 
@@ -48,13 +50,17 @@ class HudServer:
         self._logger.info("Starting server on %s:%s", self._host, self._port)
         stt_task = asyncio.create_task(self._stt_loop(), name="stt_loop")
         status_task = asyncio.create_task(self._status_loop(), name="status_loop")
+        direction_task = asyncio.create_task(self._direction_loop(), name="direction_loop")
+        alarms_task = asyncio.create_task(self._alarms_loop(), name="alarms_loop")
         try:
             async with websockets.serve(self._route, self._host, self._port, max_size=2 * 1024 * 1024):
                 await self._stop.wait()
         finally:
             stt_task.cancel()
             status_task.cancel()
-            await asyncio.gather(stt_task, status_task, return_exceptions=True)
+            direction_task.cancel()
+            alarms_task.cancel()
+            await asyncio.gather(stt_task, status_task, direction_task, alarms_task, return_exceptions=True)
 
     async def _route(self, conn: ServerConnection) -> None:
         raw_path = conn.request.path
@@ -194,6 +200,18 @@ class HudServer:
                     state.audio_q.put_nowait(bytes(msg))
                 except asyncio.QueueFull:
                     state.dropped_frames += 1
+
+                # Feed analysis pipeline from the left channel by default.
+                if state.role == "left":
+                    if self._analysis_left_q.full():
+                        try:
+                            _ = self._analysis_left_q.get_nowait()
+                        except asyncio.QueueEmpty:
+                            pass
+                    try:
+                        self._analysis_left_q.put_nowait(bytes(msg))
+                    except asyncio.QueueFull:
+                        pass
         finally:
             cur = self._esp32_by_role.get(hello_role)
             if cur and cur.device_id == hello_device_id:
@@ -291,3 +309,129 @@ class HudServer:
                 await self._broadcast_stt({"type": "error", "message": str(msg.get("error") or msg_type)})
 
         await stt.run(audio_frames(), on_stt_message, sample_rate_hz=16000)
+
+    async def _direction_loop(self) -> None:
+        """Continuously derive direction/intensity and send UI placement to Android."""
+        while True:
+            await asyncio.sleep(0.05)  # 20Hz
+            left = self._esp32_by_role.get("left")
+            right = self._esp32_by_role.get("right")
+            if not left or not right:
+                continue
+
+            l = max(0.0, left.last_rms)
+            r = max(0.0, right.last_rms)
+            total = l + r + 1e-6
+            balance = (r - l) / total  # -1..+1
+
+            direction_deg = float(np.clip(balance * 90.0, -90.0, 90.0))
+            intensity = float(np.clip(total * 2.5, 0.0, 1.0))  # heuristic gain
+
+            ui = self._direction_to_ui(direction_deg, intensity)
+            await self._broadcast_events(
+                {
+                    "type": "direction.ui",
+                    "directionDeg": direction_deg,
+                    "intensity": intensity,
+                    **ui,
+                }
+            )
+
+    async def _alarms_loop(self) -> None:
+        """Very lightweight audio heuristics for hackathon demo."""
+        sample_rate_hz = 16000
+        window_samples = sample_rate_hz  # 1s
+        hop_s = 0.2
+
+        buf = np.zeros((0,), dtype=np.float32)
+
+        fire_last_positive = 0.0
+        fire_active = False
+
+        horn_last_positive = 0.0
+        horn_active = False
+
+        loop = asyncio.get_running_loop()
+        next_eval = loop.time()
+
+        while True:
+            # Ingest audio frames from left channel queue.
+            frame_bytes = await self._analysis_left_q.get()
+            frame = pcm16le_bytes_to_float32(frame_bytes)
+            if frame.size == 0:
+                continue
+            buf = np.concatenate([buf, frame])
+            if buf.size > window_samples:
+                buf = buf[-window_samples:]
+
+            now = loop.time()
+            if now < next_eval:
+                continue
+            next_eval = now + hop_s
+            if buf.size < window_samples:
+                continue
+
+            total_rms = rms_value(buf)
+            # Band ratios (coarse heuristics; tune in the field).
+            fire_ratio = band_power_ratio(buf, sample_rate_hz, (2500.0, 3500.0))
+            horn_ratio = band_power_ratio(buf, sample_rate_hz, (300.0, 900.0))
+
+            fire_detected = total_rms > 0.02 and fire_ratio > 0.18
+            horn_detected = total_rms > 0.02 and horn_ratio > 0.20
+
+            if fire_detected:
+                fire_last_positive = now
+            if horn_detected:
+                horn_last_positive = now
+
+            # PRD: fire holds for 10s after last detection.
+            fire_should_be_active = (now - fire_last_positive) < 10.0
+            horn_should_be_active = (now - horn_last_positive) < 2.0
+
+            if fire_should_be_active and not fire_active:
+                fire_active = True
+                await self._broadcast_events({"type": "alarm.fire", "state": "started", **self._current_direction_payload()})
+            if fire_active and not fire_should_be_active:
+                fire_active = False
+                await self._broadcast_events({"type": "alarm.fire", "state": "ended", **self._current_direction_payload()})
+
+            if horn_should_be_active and not horn_active:
+                horn_active = True
+                await self._broadcast_events({"type": "alarm.car_horn", "state": "started", **self._current_direction_payload()})
+            if horn_active and not horn_should_be_active:
+                horn_active = False
+                await self._broadcast_events({"type": "alarm.car_horn", "state": "ended", **self._current_direction_payload()})
+
+    def _direction_to_ui(self, direction_deg: float, intensity: float) -> dict[str, Any]:
+        # Map direction to radar coordinates (normalized -1..1) and edge glow.
+        theta = np.deg2rad(direction_deg)
+        radius = float(np.clip(intensity, 0.0, 1.0))
+        radar_x = float(np.sin(theta) * radius)
+        radar_y = float(np.cos(theta) * radius)
+
+        if direction_deg < -20:
+            glow_edge = "left"
+        elif direction_deg > 20:
+            glow_edge = "right"
+        else:
+            glow_edge = "top"
+
+        return {
+            "radarX": radar_x,
+            "radarY": radar_y,
+            "glowEdge": glow_edge,
+            "glowStrength": float(np.clip(intensity, 0.0, 1.0)),
+        }
+
+    def _current_direction_payload(self) -> dict[str, Any]:
+        left = self._esp32_by_role.get("left")
+        right = self._esp32_by_role.get("right")
+        if not left or not right:
+            return {}
+        l = max(0.0, left.last_rms)
+        r = max(0.0, right.last_rms)
+        total = l + r + 1e-6
+        balance = (r - l) / total
+        direction_deg = float(np.clip(balance * 90.0, -90.0, 90.0))
+        intensity = float(np.clip(total * 2.5, 0.0, 1.0))
+        return {"directionDeg": direction_deg, "intensity": intensity, **self._direction_to_ui(direction_deg, intensity)}

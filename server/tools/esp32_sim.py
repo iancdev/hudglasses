@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import base64
 import json
+import math
 import time
 import wave
 
@@ -15,7 +15,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--server", required=True, help="ws://host:port/esp32/audio")
     parser.add_argument("--device-id", default="sim-esp32")
     parser.add_argument("--role", choices=["left", "right"], required=True)
-    parser.add_argument("--wav", required=True, help="Path to mono WAV file (16kHz recommended)")
+    parser.add_argument("--wav", help="Path to mono WAV file (16kHz, 16-bit PCM)")
+    parser.add_argument("--tone-hz", type=float, help="Generate a sine wave instead of reading WAV")
+    parser.add_argument("--amplitude", type=float, default=0.2, help="Tone amplitude (0..1)")
+    parser.add_argument("--duration-s", type=float, default=10.0, help="Tone duration in seconds")
     parser.add_argument("--frame-ms", type=int, default=20)
     parser.add_argument("--sample-rate", type=int, default=16000)
     return parser
@@ -37,8 +40,26 @@ def _read_pcm16_frames(wav_path: str, sample_rate: int, frame_ms: int):
             yield chunk
 
 
+def _gen_tone_frames(sample_rate: int, frame_ms: int, tone_hz: float, amplitude: float, duration_s: float):
+    frames_per_chunk = int(sample_rate * (frame_ms / 1000.0))
+    total_samples = int(sample_rate * duration_s)
+    amp = max(0.0, min(1.0, amplitude))
+    two_pi_f = 2.0 * math.pi * tone_hz
+    for start in range(0, total_samples, frames_per_chunk):
+        end = min(total_samples, start + frames_per_chunk)
+        buf = bytearray()
+        for i in range(start, end):
+            s = int(math.sin(two_pi_f * (i / sample_rate)) * amp * 32767.0)
+            buf += int(s).to_bytes(2, byteorder="little", signed=True)
+        yield bytes(buf)
+
+
 async def main() -> None:
     args = build_parser().parse_args()
+    if not args.wav and not args.tone_hz:
+        raise SystemExit("Provide --wav or --tone-hz")
+    if args.wav and args.tone_hz:
+        raise SystemExit("Provide only one of --wav or --tone-hz")
     uri = f"{args.server}?deviceId={args.device_id}&role={args.role}"
     async with websockets.connect(uri, max_size=2 * 1024 * 1024) as ws:
         hello = {
@@ -53,7 +74,11 @@ async def main() -> None:
 
         frame_s = args.frame_ms / 1000.0
         next_time = time.monotonic()
-        for frame in _read_pcm16_frames(args.wav, args.sample_rate, args.frame_ms):
+        if args.wav:
+            frames = _read_pcm16_frames(args.wav, args.sample_rate, args.frame_ms)
+        else:
+            frames = _gen_tone_frames(args.sample_rate, args.frame_ms, args.tone_hz, args.amplitude, args.duration_s)
+        for frame in frames:
             await ws.send(frame)
             next_time += frame_s
             sleep = next_time - time.monotonic()
@@ -63,4 +88,3 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-
