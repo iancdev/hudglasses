@@ -43,6 +43,9 @@ python main.py --host 0.0.0.0 --port 8765
   - Remote UI shows ESP32 left/right connected.
 - STT:
   - Speak near mics and watch subtitles on the HUD.
+- Keywords / phrases:
+  - In the phone remote UI, set comma-separated phrases and press **Apply Keywords**.
+  - Say the phrase and verify a keyword alert appears on the HUD and triggers haptics.
 - Direction:
   - Make sound on left vs right and watch the radar dot shift.
 - Alarms:
