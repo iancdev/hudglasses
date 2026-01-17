@@ -56,6 +56,10 @@ class HudServer:
         self._world_direction_deg: float | None = None
         self._latest_direction_payload: dict[str, Any] = {}
 
+        self._keywords: list[str] = []
+        self._keyword_cooldown_s: float = float(os.environ.get("KEYWORD_COOLDOWN_S", "5"))
+        self._keyword_last_hit: dict[str, float] = {}
+
         self._alarm_rms_threshold: float = float(os.environ.get("ALARM_RMS_THRESHOLD", "0.02"))
         self._fire_ratio_threshold: float = float(os.environ.get("FIRE_BAND_RATIO_THRESHOLD", "0.18"))
         self._horn_ratio_threshold: float = float(os.environ.get("HORN_BAND_RATIO_THRESHOLD", "0.20"))
@@ -128,6 +132,17 @@ class HudServer:
                     self._alarm_rms_threshold = float(obj.get("alarmRmsThreshold", self._alarm_rms_threshold))
                     self._fire_ratio_threshold = float(obj.get("fireRatioThreshold", self._fire_ratio_threshold))
                     self._horn_ratio_threshold = float(obj.get("hornRatioThreshold", self._horn_ratio_threshold))
+                    self._keyword_cooldown_s = float(obj.get("keywordCooldownS", self._keyword_cooldown_s))
+                    kws = obj.get("keywords")
+                    if isinstance(kws, list):
+                        cleaned: list[str] = []
+                        for k in kws:
+                            if not isinstance(k, str):
+                                continue
+                            kk = " ".join(k.strip().lower().split())
+                            if kk:
+                                cleaned.append(kk)
+                        self._keywords = cleaned[:50]
         finally:
             self._android_events.discard(conn)
             self._logger.info("Android /events disconnected from %s", conn.remote_address)
@@ -357,9 +372,11 @@ class HudServer:
             if msg_type == "partial_transcript":
                 text = str(msg.get("text") or "")
                 await self._broadcast_stt({"type": "partial", "text": text})
+                await self._check_keywords(text)
             elif msg_type in ("committed_transcript", "committed_transcript_with_timestamps"):
                 text = str(msg.get("text") or "")
                 await self._broadcast_stt({"type": "final", "text": text})
+                await self._check_keywords(text)
             elif msg_type == "session_started":
                 await self._broadcast_stt({"type": "status", "stt": "session_started"})
             elif msg_type in ("error", "auth_error", "quota_exceeded", "rate_limited"):
@@ -532,3 +549,26 @@ class HudServer:
             self._world_direction_deg = self._lerp_angle(self._world_direction_deg, world_estimate, 0.2)
 
         return self._wrap_deg(self._world_direction_deg - yaw)
+
+    async def _check_keywords(self, text: str) -> None:
+        if not self._keywords:
+            return
+        normalized = " ".join(str(text).lower().split())
+        if not normalized:
+            return
+        now = asyncio.get_running_loop().time()
+        for kw in self._keywords:
+            if kw not in normalized:
+                continue
+            last = self._keyword_last_hit.get(kw, 0.0)
+            if (now - last) < self._keyword_cooldown_s:
+                continue
+            self._keyword_last_hit[kw] = now
+            await self._broadcast_events(
+                {
+                    "type": "alert.keyword",
+                    "keyword": kw,
+                    "text": normalized,
+                    **self._current_direction_payload(),
+                }
+            )
