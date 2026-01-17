@@ -49,6 +49,41 @@ private fun HudUi() {
         Subtitles(state)
         KeywordAlert(state)
         EdgeGlow(state)
+        StatusOverlay(state)
+    }
+}
+
+@Composable
+private fun StatusOverlay(state: HudState) {
+    val line = buildString {
+        append(if (state.eventsConnected) "EVT✓" else "EVT×")
+        append("  ")
+        append(if (state.sttConnected) "STT✓" else "STT×")
+        if (state.sttStatus.isNotBlank()) {
+            append("(${state.sttStatus})")
+        }
+        append("  ")
+        append(if (state.esp32ConnectedLeft) "L✓" else "L×")
+        append(if (state.esp32ConnectedRight) " R✓" else " R×")
+        append("  ")
+        append(if (state.wristbandConnected) "WB✓" else "WB×")
+    }
+
+    Box(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Column(modifier = Modifier.align(Alignment.TopStart)) {
+            Text(
+                text = line,
+                color = Color(0xFFB0B0B0),
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            if (state.sttError.isNotBlank()) {
+                Text(
+                    text = "STT error: ${state.sttError}",
+                    color = Color.Red,
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            }
+        }
     }
 }
 

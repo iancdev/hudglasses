@@ -157,6 +157,7 @@ class RemoteActivity : ComponentActivity() {
     private fun refreshHudDisplay() {
         val displays = displayManager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION)
         val external = displays.firstOrNull()
+        HudStore.update { it.copy(glassesConnected = external != null) }
         if (external == null) {
             hudPresentation?.dismiss()
             hudPresentation = null
@@ -267,12 +268,23 @@ private fun RemoteUi(
                 Text("Disconnect")
             }
             Text("Events: ${if (state.eventsConnected) "connected" else "disconnected"}")
-            Text("STT: ${if (state.sttConnected) "connected" else "disconnected"}")
+            Text("STT: ${state.sttStatus.ifBlank { if (state.sttConnected) "connected" else "disconnected" }}")
         }
 
+        if (!state.glassesConnected) {
+            Text("Glasses: disconnected (no external display)")
+        } else {
+            Text("Glasses: connected")
+        }
         Text("ESP32 L: ${if (state.esp32ConnectedLeft) "connected" else "missing"}")
         Text("ESP32 R: ${if (state.esp32ConnectedRight) "connected" else "missing"}")
         Text("Wristband: ${if (state.wristbandConnected) "connected" else "disconnected"}")
+        if (state.serverStatus.isNotBlank()) {
+            Text("Server: ${state.serverStatus}")
+        }
+        if (state.sttError.isNotBlank()) {
+            Text("STT error: ${state.sttError}")
+        }
 
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(

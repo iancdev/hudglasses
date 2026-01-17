@@ -1,5 +1,6 @@
 package dev.iancdev.hudglasses
 
+import android.os.Build
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -105,6 +106,14 @@ class WsController(
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 eventsOpen = true
                 HudStore.update { it.copy(eventsConnected = true) }
+                val hello =
+                    JSONObject()
+                        .put("type", "hello")
+                        .put("v", 1)
+                        .put("client", "android")
+                        .put("model", Build.MODEL)
+                        .put("sdkInt", Build.VERSION.SDK_INT)
+                webSocket.send(hello.toString())
                 onMaybeFullyConnected()
             }
 
@@ -176,6 +185,16 @@ class WsController(
     private fun handleSttMessage(text: String) {
         val obj = runCatching { JSONObject(text) }.getOrNull() ?: return
         when (obj.optString("type")) {
+            "status" -> {
+                val stt = obj.optString("stt")
+                if (stt.isNotBlank()) {
+                    HudStore.update { it.copy(sttStatus = stt, sttError = "") }
+                }
+            }
+            "error" -> {
+                val msg = obj.optString("message", obj.optString("error"))
+                HudStore.update { it.copy(sttStatus = "error", sttError = msg) }
+            }
             "partial" -> {
                 HudStore.update { it.copy(subtitlePartial = obj.optString("text")) }
             }
@@ -196,7 +215,13 @@ class WsController(
         val esp32 = obj.optJSONObject("esp32")
         val hasLeft = esp32?.has("left") == true
         val hasRight = esp32?.has("right") == true
-        HudStore.update { it.copy(esp32ConnectedLeft = hasLeft, esp32ConnectedRight = hasRight) }
+        HudStore.update {
+            it.copy(
+                serverStatus = obj.optString("server", it.serverStatus),
+                esp32ConnectedLeft = hasLeft,
+                esp32ConnectedRight = hasRight,
+            )
+        }
     }
 
     private fun handleDirection(obj: JSONObject) {
