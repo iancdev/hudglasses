@@ -47,4 +47,4 @@ python main.py --host 0.0.0.0 --port 8765
   - Make sound on left vs right and watch the radar dot shift.
 - Alarms:
   - Play a fire alarm / car horn sample near the mics to trigger alerts (heuristic thresholds may need tuning).
-
+  - If alarms are too sensitive or not triggering, adjust thresholds in the phone remote UI and press **Apply Thresholds**.
