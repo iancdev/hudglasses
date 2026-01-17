@@ -12,18 +12,19 @@ Provide a silent, wearable way for Deaf users to understand what’s happening a
 ## 1) Hackathon Constraints + Accepted Architecture
 Accepted hackathon architecture:
 - **Laptop = “brain” server**
-  - Runs sound classification, fuses ESP32 direction telemetry, and runs ElevenLabs realtime STT.
+  - Ingests **ESP32 audio streams** (left/right), runs sound classification, computes direction/intensity, and runs ElevenLabs realtime STT.
 - **Android app = HUD client**
   - Renders HUD on Viture glasses (black background, landscape), uses head tracking, turns off electrochromic lens on init, drives wristband haptics.
-- **2× ESP32 = directional microphones (Phase 1: direction only)**
-  - Each ESP32 provides direction/intensity telemetry to the laptop (preferred).
-  - **Phase 3 / later option**: ESP32 audio may become an STT input source (selectable), but **Phase 1 uses Android mic for STT**.
+- **2× ESP32 = microphone streamers (Phase 1: required)**
+  - Each ESP32 streams microphone audio to the laptop (`role = left|right`).
+  - ESP32 does **no processing** (no direction inference, no classification, no STT).
 
 Networking:
 - Android + laptop on same network (phone hotspot OK).
-- **Two WebSocket channels**:
-  - **`/stt`**: dedicated speech-to-text channel (audio up, transcript down) for maximum subtitle responsiveness.
-  - **`/events`**: all non-STT events (direction, alarms, status, config).
+- ESP32s stream audio to the laptop (see `docs/ESP32_Protocol.md`).
+- **Two WebSocket channels (laptop → Android)**:
+  - **`/stt`**: dedicated speech-to-text channel (transcript down) for maximum subtitle responsiveness.
+  - **`/events`**: all non-STT events (radar placement, edge glow, alarms, status, config).
 
 ## 2) MVP Features (Phase 1 — Demo Must-Haves)
 ### 2.1 HUD (Android/Viture)
@@ -40,29 +41,30 @@ Networking:
     - Car horn: yellow.
 - Visible connection indicators:
   - Laptop server connected/disconnected.
-  - ESP32 direction telemetry connected/disconnected.
+  - ESP32 audio streaming connected/disconnected.
   - STT active/inactive/error.
   - Wristband connected/disconnected.
 
 ### 2.2 Speech-to-Text (STT)
-- **Android mic is the default STT input**.
-- Laptop server connects to **ElevenLabs realtime STT** (WebSocket) and streams audio chunks from Android.
+- **ESP32 audio is the default STT input** (server selects/mixes left/right as needed).
+- Laptop server connects to **ElevenLabs realtime STT** (WebSocket) and streams audio chunks from the ESP32 audio stream.
 - Subtitles should update as fast as possible:
   - Forward ElevenLabs `partial_transcript` updates immediately.
   - Forward `committed_transcript` as final lines.
 - Optional “per-word” update (if partials are too chunky):
   - Server computes a word-diff delta from successive partial transcripts and emits incremental updates to Android.
 
-### 2.3 Direction + Intensity (ESP32 direction-only)
-- Two ESP32 devices (left/right) send telemetry to laptop:
-  - Example: `{ deviceId, tsMs, rms }` at ~20–50Hz.
-- Laptop fuses telemetry into:
-  - `directionDeg` (coarse is fine for demo: left/front/right mapped to angles)
-  - `intensity` (0..1 normalized)
-- Android uses direction+intensity for radar placement, edge glow strength, and wristband haptics.
+### 2.3 Direction + Intensity (Derived on Server from ESP32 Audio)
+- Laptop server derives direction/intensity from the left/right ESP32 audio streams:
+  - Compute per-stream energy (e.g., RMS) in short windows (20–50ms).
+  - Infer coarse direction from left/right balance (good enough for demo).
+- Server sends **UI-ready placement** to Android over `/events`, for example:
+  - radar position (`radarX`, `radarY` normalized) and color
+  - edge glow target (`glowEdge`) and strength (`glowStrength`)
+- Android renders what the server sends (keeps Android simple and consistent with the “server is the brain” architecture).
 
 ### 2.4 Danger Sound Detection
-- Laptop server runs sound classification on the audio stream (Phase 1: use Android mic PCM stream).
+- Laptop server runs sound classification on the ESP32 audio stream.
 - Detect and emit at minimum one class reliably; target both:
   - `alarm.fire`
   - `alarm.car_horn`
@@ -99,10 +101,6 @@ Notes:
 ### 5.1 `/stt` (Dedicated STT channel)
 Purpose: keep subtitle latency as low as possible and avoid contention with event traffic.
 
-**Android → Server (audio upstream)**
-- Stream PCM frames (recommended internal format: mono 16kHz, 16-bit).
-- If we keep it JSON for hackathon simplicity, send base64 audio frames; otherwise send binary frames with a small header.
-
 **Server → Android (transcript downstream)**
 - Messages include:
   - `partial`: latest partial text
@@ -111,15 +109,16 @@ Purpose: keep subtitle latency as low as possible and avoid contention with even
 
 ### 5.2 `/events` (All other events)
 Server → Android:
-- `direction.update` (directionDeg + intensity, at ~10–30Hz)
-- `alarm.fire` / `alarm.car_horn` (state + confidence + directionDeg + intensity)
+- `direction.ui` (server-derived UI placement: radar coordinates + edge glow)
+- `alarm.fire` / `alarm.car_horn` (state + confidence + UI placement)
 - `status` (connections, errors, server state)
 - `alert.keyword` (Phase 2)
 
 Android → Server:
 - `hello` (client info)
 - `config.update` (thresholds, toggles, keyword list)
-- `audio.source` (future: Android vs ESP32 STT selector; Phase 1 defaults to Android)
+- `head_pose` (optional but recommended: head yaw so the server can make UI placement head-relative)
+- `audio.source` (future: select ESP32 vs Android mic; Phase 1 defaults to ESP32)
 
 ## 6) ElevenLabs STT Integration (Server-Side)
 Docs referenced:
@@ -141,11 +140,12 @@ Implementation notes (from docs):
 ### 7.1 Laptop Server (Python or Node.js)
 Responsibilities:
 - Host WebSockets:
-  - `/stt`: receive Android audio stream; proxy to ElevenLabs STT; forward partial/final transcripts to Android.
-  - `/events`: broadcast direction + alarms + status; receive config updates.
-- Ingest ESP32 telemetry (UDP preferred).
+  - `/stt`: forward partial/final transcripts to Android (dedicated channel).
+  - `/events`: broadcast HUD events (radar placement, edge glow, alarms, status); receive config updates and optional head pose.
+- Ingest ESP32 audio streams (left/right) (see `docs/ESP32_Protocol.md`).
 - Run danger-sound classifier continuously on audio stream.
-- Fuse direction telemetry with current “active audio event” windows (speech + alarms).
+- Derive direction/intensity from left/right audio and attach UI placement to events.
+- Stream STT audio to ElevenLabs and relay transcript updates to Android.
 
 Keep the server simple:
 - One process.
@@ -160,19 +160,17 @@ Responsibilities:
 - Render HUD:
   - subtitles, radar, edge glow, status indicators.
 - Connect to server:
-  - WebSocket `/stt` for audio+transcripts
+  - WebSocket `/stt` for transcripts
   - WebSocket `/events` for direction/alarms/status/config
-- Microphone capture:
-  - `AudioRecord` stream to `/stt`.
 - Head tracking:
-  - Use Viture head pose to keep direction cues consistent as user turns head.
+  - Use Viture head pose to keep HUD stable; optionally send `head_pose` to the server so server-generated UI placement stays accurate as the user turns.
 - Wristband:
   - BLE connect + write haptic patterns.
 
-### 7.3 ESP32 Devices (Direction-only)
+### 7.3 ESP32 Devices (Audio streamers)
 Responsibilities:
-- Sample mic amplitude and compute RMS/intensity.
-- Send telemetry packets to laptop at fixed rate.
+- Capture microphone audio.
+- Stream audio frames continuously to laptop (left/right roles).
 - Keep provisioning dead simple for hackathon (hardcoded Wi‑Fi or one-time setup).
 
 ### 7.4 Wristband Device
@@ -185,22 +183,23 @@ Responsibilities:
    - Black background, landscape, lens off on init, basic UI layout.
 2) **Networking scaffolding**
    - `/events` connect + status indicator + reconnect loop.
-3) **STT channel**
-   - `/stt` audio stream + ElevenLabs realtime STT + partial/final subtitles rendering.
-4) **ESP32 direction ingestion**
-   - Telemetry → direction.update events → radar + edge glow.
-5) **Danger sounds**
+3) **ESP32 audio ingestion**
+   - ESP32 audio streaming → server ingestion + basic health/status events.
+4) **STT channel**
+   - ESP32 audio → ElevenLabs realtime STT → `/stt` partial/final subtitles rendering.
+5) **Direction UI events**
+   - Server derives direction/intensity → emits UI placement → radar + edge glow.
+6) **Danger sounds**
    - Fire alarm + car horn detection → alarms on HUD (incl. fire 10s hold).
-6) **Wristband haptics**
+7) **Wristband haptics**
    - Directional patterns tied to speech + alarm events.
-7) **Phase 2: keyword/phrase detection**
+8) **Phase 2: keyword/phrase detection**
    - User-configured phrases → `alert.keyword` → HUD + distinct haptics.
 
 ## 9) Key Decisions Locked In (Per your clarifications)
 - Draft is the source of truth; PRDs supplement it.
-- Phase 1 STT input: **Android mic**.
-- Phase 1 direction input: **ESP32 direction/intensity only**.
+- Phase 1 audio input: **ESP32 audio streams (left/right)**.
+- Phase 1 processing location: **server does everything** (direction, classification, STT).
 - Phase 2: **user-configurable keyword/phrase detection**.
 - Out of scope: sign language interpretation.
 - **Separate STT socket** from events socket to prioritize subtitle latency.
-
