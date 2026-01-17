@@ -9,18 +9,25 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 class HudPresentation(context: Context, display: Display) : Presentation(context, display) {
@@ -51,7 +58,12 @@ private fun Radar(state: HudState) {
         val radius = size.minDimension * 0.12f
         drawCircle(color = Color(0xFF2A2A2A), radius = radius, center = center)
         val dot = Offset(center.x + state.radarX * radius, center.y - state.radarY * radius)
-        drawCircle(color = Color.White, radius = 10f, center = dot, alpha = 0.9f)
+        val dotColor = when {
+            state.fireAlarm != "idle" -> Color.Red
+            state.carHorn != "idle" -> Color.Yellow
+            else -> Color.White
+        }
+        drawCircle(color = dotColor, radius = 10f, center = dot, alpha = 0.95f)
     }
 }
 
@@ -83,13 +95,68 @@ private fun EdgeGlow(state: HudState) {
         state.carHorn != "idle" -> Color.Yellow
         else -> Color.White
     }
-    val alpha = state.glowStrength.coerceIn(0f, 1f) * 0.6f
+    val alpha = state.glowStrength.coerceIn(0f, 1f) * 0.85f
     if (alpha <= 0f) return
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(glow.copy(alpha = alpha * 0.08f)),
-    )
-}
+    val thickness: Dp = 90.dp
+    val c = glow.copy(alpha = alpha)
+    Box(modifier = Modifier.fillMaxSize()) {
+        when (state.glowEdge) {
+            "left" -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .width(thickness)
+                        .align(Alignment.CenterStart)
+                        .background(
+                            Brush.horizontalGradient(
+                                colors = listOf(c, Color.Transparent),
+                            )
+                        )
+                )
+            }
 
+            "right" -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .width(thickness)
+                        .align(Alignment.CenterEnd)
+                        .background(
+                            Brush.horizontalGradient(
+                                colors = listOf(Color.Transparent, c),
+                            )
+                        )
+                )
+            }
+
+            "bottom" -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(thickness)
+                        .align(Alignment.BottomCenter)
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(Color.Transparent, c),
+                            )
+                        )
+                )
+            }
+
+            else -> { // top
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(thickness)
+                        .align(Alignment.TopCenter)
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(c, Color.Transparent),
+                            )
+                        )
+                )
+            }
+        }
+    }
+}
