@@ -35,3 +35,8 @@ Simulate an ESP32 streaming a WAV file (16kHz mono PCM recommended):
 python tools/esp32_sim.py --server ws://127.0.0.1:8765/esp32/audio --role left --device-id sim-left --wav path/to/file.wav
 ```
 
+Or generate a tone (useful for testing left/right imbalance):
+```bash
+python tools/esp32_sim.py --server ws://127.0.0.1:8765/esp32/audio --role left --device-id sim-left --tone-hz 600 --amplitude 0.25 --duration-s 30
+python tools/esp32_sim.py --server ws://127.0.0.1:8765/esp32/audio --role right --device-id sim-right --tone-hz 600 --amplitude 0.05 --duration-s 30
+```
