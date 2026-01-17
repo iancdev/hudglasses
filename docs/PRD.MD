@@ -8,6 +8,7 @@ Creating a native Android applicatoin using Koitlin, and Viture SDK, we can inte
 - Viture SDK
 - Native Android Koitlin
 - ESP32 (2 microphones connects to 2 seperate ESP32, which becomes the data source for directional audio detection and speech to text)
+- The on-device android microphone can also be used to combine audio sources for speech recognition. We should pick one that is best for our use case, but should be a selector for now.
 - ElevenLabs API for speech to text (live)
 Refer to ``/VitureSDK`` for what API is available
 
