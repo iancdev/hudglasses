@@ -387,6 +387,8 @@ class HudServer:
         )
         stt = ElevenLabsRealtimeStt(cfg)
 
+        last_partial_words: list[str] = []
+
         async def audio_frames() -> Any:
             active_role = "left"
             while True:
@@ -414,15 +416,31 @@ class HudServer:
                     continue
                 yield frame
 
+        def compute_delta_words(current_text: str) -> list[str]:
+            nonlocal last_partial_words
+            words = [w for w in current_text.strip().split() if w]
+            if not last_partial_words:
+                last_partial_words = words
+                return words[:8]
+            if len(words) >= len(last_partial_words) and words[: len(last_partial_words)] == last_partial_words:
+                delta = words[len(last_partial_words) :]
+                last_partial_words = words
+                return delta[:8]
+            # Partial transcript was revised; don't emit misleading deltas.
+            last_partial_words = words
+            return []
+
         async def on_stt_message(msg: dict[str, Any]) -> None:
+            nonlocal last_partial_words
             msg_type = msg.get("message_type")
             if msg_type == "partial_transcript":
                 text = str(msg.get("text") or "")
-                await self._broadcast_stt({"type": "partial", "text": text})
+                await self._broadcast_stt({"type": "partial", "text": text, "deltaWords": compute_delta_words(text)})
                 await self._check_keywords(text)
             elif msg_type in ("committed_transcript", "committed_transcript_with_timestamps"):
                 text = str(msg.get("text") or "")
                 await self._broadcast_stt({"type": "final", "text": text})
+                last_partial_words = []
                 await self._check_keywords(text)
             elif msg_type == "session_started":
                 await self._broadcast_stt({"type": "status", "stt": "session_started"})
@@ -469,9 +487,11 @@ class HudServer:
 
         fire_last_positive = 0.0
         fire_active = False
+        fire_last_confidence = 0.0
 
         horn_last_positive = 0.0
         horn_active = False
+        horn_last_confidence = 0.0
 
         loop = asyncio.get_running_loop()
         next_eval = loop.time()
@@ -528,10 +548,22 @@ class HudServer:
             fire_detected = total_rms > self._alarm_rms_threshold and fire_ratio > self._fire_ratio_threshold
             horn_detected = total_rms > self._alarm_rms_threshold and horn_ratio > self._horn_ratio_threshold
 
+            def confidence(total: float, ratio: float, total_th: float, ratio_th: float) -> float:
+                if total <= total_th or ratio <= ratio_th:
+                    return 0.0
+                rms_score = (total - total_th) / max(total_th, 1e-6)
+                ratio_score = (ratio - ratio_th) / max(ratio_th, 1e-6)
+                return float(np.clip(0.5 * rms_score + 0.5 * ratio_score, 0.0, 1.0))
+
+            fire_confidence = confidence(total_rms, fire_ratio, self._alarm_rms_threshold, self._fire_ratio_threshold)
+            horn_confidence = confidence(total_rms, horn_ratio, self._alarm_rms_threshold, self._horn_ratio_threshold)
+
             if fire_detected:
                 fire_last_positive = now
+                fire_last_confidence = fire_confidence
             if horn_detected:
                 horn_last_positive = now
+                horn_last_confidence = horn_confidence
 
             # PRD: fire holds for 10s after last detection.
             fire_should_be_active = (now - fire_last_positive) < 10.0
@@ -539,17 +571,30 @@ class HudServer:
 
             if fire_should_be_active and not fire_active:
                 fire_active = True
-                await self._broadcast_events({"type": "alarm.fire", "state": "started", **self._current_direction_payload()})
+                await self._broadcast_events(
+                    {"type": "alarm.fire", "state": "started", "confidence": fire_last_confidence, **self._current_direction_payload()}
+                )
             if fire_active and not fire_should_be_active:
                 fire_active = False
-                await self._broadcast_events({"type": "alarm.fire", "state": "ended", **self._current_direction_payload()})
+                await self._broadcast_events(
+                    {"type": "alarm.fire", "state": "ended", "confidence": 0.0, **self._current_direction_payload()}
+                )
 
             if horn_should_be_active and not horn_active:
                 horn_active = True
-                await self._broadcast_events({"type": "alarm.car_horn", "state": "started", **self._current_direction_payload()})
+                await self._broadcast_events(
+                    {
+                        "type": "alarm.car_horn",
+                        "state": "started",
+                        "confidence": horn_last_confidence,
+                        **self._current_direction_payload(),
+                    }
+                )
             if horn_active and not horn_should_be_active:
                 horn_active = False
-                await self._broadcast_events({"type": "alarm.car_horn", "state": "ended", **self._current_direction_payload()})
+                await self._broadcast_events(
+                    {"type": "alarm.car_horn", "state": "ended", "confidence": 0.0, **self._current_direction_payload()}
+                )
 
     def _direction_to_ui(self, direction_deg: float, intensity: float) -> dict[str, Any]:
         # Map direction to radar coordinates (normalized -1..1) and edge glow.
