@@ -40,7 +40,7 @@ android {
 
 dependencies {
     // Viture SDK (download and place into app/libs)
-    vitureImplementation(files("libs/VITURE-SDK-1.0.7.aar"))
+    add("vitureImplementation", files("libs/VITURE-SDK-1.0.7.aar"))
 
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-compose:1.9.0")
