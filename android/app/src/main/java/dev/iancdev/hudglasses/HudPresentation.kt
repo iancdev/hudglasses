@@ -47,6 +47,7 @@ private fun HudUi() {
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         Radar(state)
         Subtitles(state)
+        KeywordAlert(state)
         EdgeGlow(state)
     }
 }
@@ -84,6 +85,19 @@ private fun Subtitles(state: HudState) {
             style = MaterialTheme.typography.headlineSmall,
             textAlign = TextAlign.Start,
             modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun KeywordAlert(state: HudState) {
+    if (state.keywordAlert.isBlank()) return
+    Box(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+        Text(
+            text = "KEYWORD: ${state.keywordAlert}",
+            color = Color.Red,
+            style = MaterialTheme.typography.headlineSmall,
+            modifier = Modifier.align(Alignment.TopCenter),
         )
     }
 }

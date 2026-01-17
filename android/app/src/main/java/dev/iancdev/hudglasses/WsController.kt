@@ -166,6 +166,7 @@ class WsController(
             "direction.ui" -> handleDirection(obj)
             "alarm.fire" -> handleAlarm(obj, isFire = true)
             "alarm.car_horn" -> handleAlarm(obj, isFire = false)
+            "alert.keyword" -> handleKeyword(obj)
         }
         onEvents(HudEvent.EventsMessage(obj))
     }
@@ -219,5 +220,11 @@ class WsController(
         HudStore.update {
             if (isFire) it.copy(fireAlarm = state) else it.copy(carHorn = state)
         }
+    }
+
+    private fun handleKeyword(obj: JSONObject) {
+        val kw = obj.optString("keyword", "")
+        if (kw.isBlank()) return
+        HudStore.update { it.copy(keywordAlert = kw) }
     }
 }

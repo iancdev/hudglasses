@@ -26,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
@@ -87,6 +88,20 @@ class RemoteActivity : ComponentActivity() {
                                 .put("alarmRmsThreshold", rms)
                                 .put("fireRatioThreshold", fire)
                                 .put("hornRatioThreshold", horn)
+                        )
+                    },
+                    onApplyKeywords = { keywordsCsv, cooldownS ->
+                        HudStore.update { it.copy(keywordsCsv = keywordsCsv, keywordCooldownS = cooldownS) }
+                        val keywords = keywordsCsv
+                            .split(",", "\n")
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                            .take(50)
+                        wsController.sendOnEventsChannel(
+                            JSONObject()
+                                .put("type", "config.update")
+                                .put("keywordCooldownS", cooldownS)
+                                .put("keywords", JSONArray(keywords))
                         )
                     },
                 )
@@ -151,6 +166,7 @@ private fun RemoteUi(
     onConnectWristband: () -> Unit,
     onDisconnectWristband: () -> Unit,
     onApplyThresholds: (Float, Float, Float) -> Unit,
+    onApplyKeywords: (String, Float) -> Unit,
 ) {
     val state by HudStore.state.collectAsState()
     var url by remember(state.serverUrl) { mutableStateOf(state.serverUrl) }
@@ -158,6 +174,8 @@ private fun RemoteUi(
     var rmsStr by remember(state.alarmRmsThreshold) { mutableStateOf(state.alarmRmsThreshold.toString()) }
     var fireStr by remember(state.fireRatioThreshold) { mutableStateOf(state.fireRatioThreshold.toString()) }
     var hornStr by remember(state.hornRatioThreshold) { mutableStateOf(state.hornRatioThreshold.toString()) }
+    var keywordsCsv by remember(state.keywordsCsv) { mutableStateOf(state.keywordsCsv) }
+    var keywordCooldownStr by remember(state.keywordCooldownS) { mutableStateOf(state.keywordCooldownS.toString()) }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -243,8 +261,36 @@ private fun RemoteUi(
             Text("Apply Thresholds")
         }
 
+        Text("Keywords / phrases (Phase 2)")
+        OutlinedTextField(
+            value = keywordsCsv,
+            onValueChange = { keywordsCsv = it },
+            label = { Text("Comma-separated phrases") },
+            singleLine = false,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = keywordCooldownStr,
+                onValueChange = { keywordCooldownStr = it },
+                label = { Text("Cooldown (s)") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            Button(
+                onClick = {
+                    val cd = keywordCooldownStr.toFloatOrNull() ?: state.keywordCooldownS
+                    onApplyKeywords(keywordsCsv, cd)
+                },
+            ) {
+                Text("Apply Keywords")
+            }
+        }
+
         Text("Fire alarm: ${state.fireAlarm}")
         Text("Car horn: ${state.carHorn}")
+        if (state.keywordAlert.isNotBlank()) {
+            Text("Keyword alert: ${state.keywordAlert}")
+        }
 
         Text("Partial: ${state.subtitlePartial}")
         Text("Lines: ${state.subtitleLines.takeLast(3).joinToString(\" | \")}")

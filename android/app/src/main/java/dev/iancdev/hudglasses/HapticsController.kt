@@ -40,6 +40,10 @@ class HapticsController(
                 wristbandController?.send(patternId = 11, intensity0to1 = 0.8f, durationMs = 800)
                 buzz(pattern = longArrayOf(0, 200, 100, 200, 100, 200))
             }
+            "alert.keyword" -> {
+                wristbandController?.send(patternId = 20, intensity0to1 = 1.0f, durationMs = 600)
+                buzz(pattern = longArrayOf(0, 120, 80, 120, 80, 120))
+            }
             "direction.ui" -> {
                 val intensity = obj.optDouble("intensity", 0.0).toFloat()
                 val direction = obj.optDouble("directionDeg", 0.0).toFloat()
