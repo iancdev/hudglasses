@@ -13,8 +13,11 @@ Provide a silent, wearable way for Deaf users to understand what’s happening a
 Accepted hackathon architecture:
 - **Laptop = “brain” server**
   - Ingests **ESP32 audio streams** (left/right), runs sound classification, computes direction/intensity, and runs ElevenLabs realtime STT.
-- **Android app = HUD client**
-  - Renders HUD on Viture glasses (black background, landscape), uses head tracking, turns off electrochromic lens on init, drives wristband haptics.
+- **Android app = HUD client + phone remote**
+  - Renders the HUD on the **Viture external display only** (black background, landscape).
+  - Uses the **phone screen as a remote UI** (settings, connection state, debug/calibration).
+  - Uses Viture SDK head tracking (IMU), drives wristband haptics.
+  - Electrochromic lens control: keep as a requirement from PRD, but **the Viture Android SDK v1.0.7 we reviewed only exposes IMU + 2D/3D mode** (no explicit electrochromic API found), so treat this as **“if supported by SDK/device”**.
 - **2× ESP32 = microphone streamers (Phase 1: required)**
   - Each ESP32 streams microphone audio to the laptop (`role = left|right`).
   - ESP32 does **no processing** (no direction inference, no classification, no STT).
@@ -28,10 +31,16 @@ Networking:
 
 ## 2) MVP Features (Phase 1 — Demo Must-Haves)
 ### 2.1 HUD (Android/Viture)
-- Fullscreen black background, landscape orientation.
-- Viture SDK init:
-  - Disable electrochromic lens on app start.
-  - Enable head tracking to stabilize direction indicators relative to head orientation.
+- HUD is rendered on the **Viture external display only** (phone screen is not the HUD).
+- Viture display: fullscreen black background, landscape orientation.
+- Phone screen: remote UI with large controls and visible state (no requirement to be black).
+- Viture SDK init (from SDK guide):
+  - Use `ArManager.getInstance(context)`, `registerCallback(ArCallback)`, `init()` (requests USB permission).
+  - Wait for init result via `ArCallback.onEvent(Constants.EVENT_ID_INIT, ...)`.
+  - Enable IMU stream via `ArManager.setImuOn(true)` and optionally set rate via `ArManager.setImuFrequency(...)`.
+  - Read head pose from `ArCallback.onImu(...)` (Euler yaw/pitch/roll).
+  - Release resources on exit via `ArManager.release()` and `unregisterCallback(...)`.
+  - Optional: set 2D/3D mode via `ArManager.set3D(...)` if needed for the glasses mode.
 - HUD widgets:
   - **Subtitles panel**: shows partial and final transcript updates in realtime.
   - **Radar**: shows detected sound direction + intensity.
@@ -44,6 +53,20 @@ Networking:
   - ESP32 audio streaming connected/disconnected.
   - STT active/inactive/error.
   - Wristband connected/disconnected.
+
+### 2.1.1 Viture-Only UI + Phone Remote (Implementation Approach)
+Android multi-display plan (standard Android; separate from the Viture SDK):
+- Detect external display via `DisplayManager` (e.g., `DISPLAY_CATEGORY_PRESENTATION`).
+- Render HUD on that display using either:
+  - a `Presentation` attached to the Viture `Display`, or
+  - an Activity launched onto the Viture `Display` (via `ActivityOptions.setLaunchDisplayId(...)`).
+- Keep the phone UI in a normal Activity on the default display as a remote controller.
+- Recommended ownership split:
+  - Phone remote Activity (or a bound Service) owns network sockets + Viture SDK (USB permission + IMU).
+  - HUD display is “dumb rendering”: it consumes server events and draws.
+- If the glasses disconnect:
+  - show a “Glasses disconnected” state on the phone remote,
+  - optionally fall back to a HUD preview on the phone for debugging.
 
 ### 2.2 Speech-to-Text (STT)
 - **ESP32 audio is the default STT input** (server selects/mixes left/right as needed).
@@ -157,13 +180,16 @@ Keep the server simple:
 
 ### 7.2 Android App (Kotlin + Viture SDK)
 Responsibilities:
-- Render HUD:
+- Render HUD on Viture display only:
   - subtitles, radar, edge glow, status indicators.
+- Render phone remote UI:
+  - connection state, toggles, thresholds, keyword list (Phase 2), debug.
 - Connect to server:
   - WebSocket `/stt` for transcripts
   - WebSocket `/events` for direction/alarms/status/config
 - Head tracking:
-  - Use Viture head pose to keep HUD stable; optionally send `head_pose` to the server so server-generated UI placement stays accurate as the user turns.
+  - Use Viture SDK (`ArManager` / `ArCallback.onImu`) to read yaw/pitch/roll.
+  - Send `head_pose` to the server (recommended) so server-generated UI placement stays accurate as the user turns.
 - Wristband:
   - BLE connect + write haptic patterns.
 
@@ -180,7 +206,8 @@ Responsibilities:
 
 ## 8) Milestones (Hackathon Execution Order)
 1) **HUD shell on Android/Viture**
-   - Black background, landscape, lens off on init, basic UI layout.
+   - Multi-display: HUD on Viture external display only + phone remote UI on handset screen.
+   - Black background, landscape on Viture; lens off on init (if supported); basic UI layout.
 2) **Networking scaffolding**
    - `/events` connect + status indicator + reconnect loop.
 3) **ESP32 audio ingestion**
