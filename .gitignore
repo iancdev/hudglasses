@@ -13,3 +13,9 @@ android/.idea/
 android/**/build/
 android/local.properties
 android/app/libs/*.aar
+
+# viture sdk (local only)
+VitureSDK/aar/
+VitureSDK/VITURESensorDemo/
+VitureSDK/*.pdf
+VitureSDK/*.tar.*
