@@ -20,6 +20,7 @@ class WsController(
 
     private val scheduler = Executors.newSingleThreadScheduledExecutor()
     private var reconnectFuture: ScheduledFuture<*>? = null
+    private var keywordClearFuture: ScheduledFuture<*>? = null
     private var reconnectAttempts: Int = 0
     @Volatile private var shouldConnect: Boolean = false
     @Volatile private var targetBaseUrl: String? = null
@@ -43,6 +44,7 @@ class WsController(
         targetBaseUrl = null
         reconnectAttempts = 0
         reconnectFuture?.cancel(false)
+        keywordClearFuture?.cancel(false)
         closeSockets()
         HudStore.update { it.copy(eventsConnected = false, sttConnected = false) }
     }
@@ -226,5 +228,11 @@ class WsController(
         val kw = obj.optString("keyword", "")
         if (kw.isBlank()) return
         HudStore.update { it.copy(keywordAlert = kw) }
+        keywordClearFuture?.cancel(false)
+        keywordClearFuture = scheduler.schedule(
+            { HudStore.update { it.copy(keywordAlert = "") } },
+            3,
+            TimeUnit.SECONDS,
+        )
     }
 }
