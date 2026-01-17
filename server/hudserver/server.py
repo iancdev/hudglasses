@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -11,6 +12,8 @@ import websockets
 from websockets.asyncio.server import ServerConnection
 
 from hudserver.logging_utils import setup_logging
+from hudserver.protocol import dumps, loads
+from hudserver.elevenlabs_stt import ElevenLabsConfig, ElevenLabsRealtimeStt
 
 
 @dataclass(slots=True)
@@ -43,8 +46,15 @@ class HudServer:
 
     async def run(self) -> None:
         self._logger.info("Starting server on %s:%s", self._host, self._port)
-        async with websockets.serve(self._route, self._host, self._port, max_size=2 * 1024 * 1024):
-            await self._stop.wait()
+        stt_task = asyncio.create_task(self._stt_loop(), name="stt_loop")
+        status_task = asyncio.create_task(self._status_loop(), name="status_loop")
+        try:
+            async with websockets.serve(self._route, self._host, self._port, max_size=2 * 1024 * 1024):
+                await self._stop.wait()
+        finally:
+            stt_task.cancel()
+            status_task.cancel()
+            await asyncio.gather(stt_task, status_task, return_exceptions=True)
 
     async def _route(self, conn: ServerConnection) -> None:
         raw_path = conn.request.path
@@ -69,9 +79,15 @@ class HudServer:
         self._android_events.add(conn)
         self._logger.info("Android /events connected from %s", conn.remote_address)
         try:
-            async for _msg in conn:
-                # TODO: parse incoming config/head_pose.
-                pass
+            await conn.send(dumps({"type": "status", "server": "connected"}))
+            async for msg in conn:
+                if not isinstance(msg, str):
+                    continue
+                try:
+                    _obj = loads(msg)
+                except Exception:
+                    continue
+                # TODO: config.update / head_pose support in later iterations.
         finally:
             self._android_events.discard(conn)
             self._logger.info("Android /events disconnected from %s", conn.remote_address)
@@ -80,6 +96,7 @@ class HudServer:
         self._android_stt.add(conn)
         self._logger.info("Android /stt connected from %s", conn.remote_address)
         try:
+            await conn.send(dumps({"type": "status", "stt": "connected"}))
             async for _msg in conn:
                 # Server -> Android only for now.
                 pass
@@ -182,3 +199,95 @@ class HudServer:
             if cur and cur.device_id == hello_device_id:
                 self._esp32_by_role.pop(hello_role, None)
             self._logger.info("ESP32 disconnected deviceId=%s role=%s", hello_device_id, hello_role)
+
+    async def _broadcast_events(self, obj: dict[str, Any]) -> None:
+        if not self._android_events:
+            return
+        payload = dumps(obj)
+        await self._broadcast(self._android_events, payload)
+
+    async def _broadcast_stt(self, obj: dict[str, Any]) -> None:
+        if not self._android_stt:
+            return
+        payload = dumps(obj)
+        await self._broadcast(self._android_stt, payload)
+
+    async def _broadcast(self, conns: set[ServerConnection], payload: str) -> None:
+        dead: list[ServerConnection] = []
+        for c in list(conns):
+            try:
+                await c.send(payload)
+            except Exception:
+                dead.append(c)
+        for c in dead:
+            conns.discard(c)
+
+    async def _status_loop(self) -> None:
+        while True:
+            await asyncio.sleep(1.0)
+            esp32 = {
+                role: {
+                    "deviceId": s.device_id,
+                    "role": s.role,
+                    "sampleRateHz": s.sample_rate_hz,
+                    "frameMs": s.frame_ms,
+                    "lastRms": s.last_rms,
+                    "droppedFrames": s.dropped_frames,
+                }
+                for role, s in self._esp32_by_role.items()
+            }
+            await self._broadcast_events(
+                {
+                    "type": "status",
+                    "server": "ok",
+                    "android": {"eventsClients": len(self._android_events), "sttClients": len(self._android_stt)},
+                    "esp32": esp32,
+                }
+            )
+
+    async def _stt_loop(self) -> None:
+        api_key = (os.environ.get("ELEVENLABS_API_KEY") or "").strip()
+        if not api_key:
+            self._logger.warning("ELEVENLABS_API_KEY not set; STT disabled")
+            while True:
+                await asyncio.sleep(10.0)
+
+        cfg = ElevenLabsConfig(
+            api_key=api_key,
+            host=(os.environ.get("ELEVENLABS_HOST") or "api.elevenlabs.io").strip(),
+            model_id=(os.environ.get("ELEVENLABS_MODEL_ID") or None),
+            language_code=(os.environ.get("ELEVENLABS_LANGUAGE_CODE") or None),
+            commit_strategy=(os.environ.get("ELEVENLABS_COMMIT_STRATEGY") or "vad"),
+            include_timestamps=(os.environ.get("ELEVENLABS_INCLUDE_TIMESTAMPS") == "1"),
+        )
+        stt = ElevenLabsRealtimeStt(cfg)
+
+        async def audio_frames() -> Any:
+            # Default: prefer left, fallback to right.
+            while True:
+                state = self._esp32_by_role.get("left") or self._esp32_by_role.get("right")
+                if state is None:
+                    await asyncio.sleep(0.1)
+                    continue
+                try:
+                    frame = await asyncio.wait_for(state.audio_q.get(), timeout=0.5)
+                except asyncio.CancelledError:
+                    raise
+                except asyncio.TimeoutError:
+                    continue
+                yield frame
+
+        async def on_stt_message(msg: dict[str, Any]) -> None:
+            msg_type = msg.get("message_type")
+            if msg_type == "partial_transcript":
+                text = str(msg.get("text") or "")
+                await self._broadcast_stt({"type": "partial", "text": text})
+            elif msg_type in ("committed_transcript", "committed_transcript_with_timestamps"):
+                text = str(msg.get("text") or "")
+                await self._broadcast_stt({"type": "final", "text": text})
+            elif msg_type == "session_started":
+                await self._broadcast_stt({"type": "status", "stt": "session_started"})
+            elif msg_type in ("error", "auth_error", "quota_exceeded", "rate_limited"):
+                await self._broadcast_stt({"type": "error", "message": str(msg.get("error") or msg_type)})
+
+        await stt.run(audio_frames(), on_stt_message, sample_rate_hz=16000)
