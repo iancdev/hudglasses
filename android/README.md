@@ -23,3 +23,15 @@ This project has 2 product flavors:
 - Launch the app on the phone (Pixel 8a target).
 - The phone UI is a remote controller.
 - The HUD should appear on the Viture display when detected as an external display.
+
+## CLI Build (no Android Studio)
+Prereqs:
+- JDK 17 (recommended: `brew install openjdk@17`)
+- Android SDK Platform 34 + Build-Tools 34.0.0 + Platform-Tools
+
+Commands:
+- `export JAVA_HOME="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"`
+- `export ANDROID_SDK_ROOT="$HOME/Library/Android/sdk"`
+- `cd android`
+- `./gradlew :app:assembleNosdkDebug`
+- `./gradlew :app:assembleVitureDebug` (requires the Viture AAR in `android/app/libs/`)
