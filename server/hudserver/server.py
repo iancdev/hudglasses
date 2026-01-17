@@ -24,7 +24,8 @@ class Esp32AudioState:
     sample_rate_hz: int
     frame_ms: int
     bytes_per_frame: int
-    audio_q: asyncio.Queue[bytes]
+    stt_q: asyncio.Queue[bytes]
+    analysis_q: asyncio.Queue[bytes]
     last_rms: float
     last_seen_monotonic: float
     dropped_frames: int
@@ -42,7 +43,6 @@ class HudServer:
         self._android_stt: set[ServerConnection] = set()
 
         self._esp32_by_role: dict[str, Esp32AudioState] = {}
-        self._analysis_left_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=500)  # ~10s at 20ms frames
 
         self._stop = asyncio.Event()
 
@@ -143,14 +143,16 @@ class HudServer:
         samples_per_frame = int(sample_rate_hz * (frame_ms / 1000.0))
         bytes_per_frame = samples_per_frame * 2
 
-        audio_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=200)  # ~4s at 20ms frames
+        stt_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=200)  # ~4s at 20ms frames
+        analysis_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=200)  # ~4s at 20ms frames
         self._esp32_by_role[hello_role] = Esp32AudioState(
             device_id=hello_device_id,
             role=hello_role,
             sample_rate_hz=sample_rate_hz,
             frame_ms=frame_ms,
             bytes_per_frame=bytes_per_frame,
-            audio_q=audio_q,
+            stt_q=stt_q,
+            analysis_q=analysis_q,
             last_rms=0.0,
             last_seen_monotonic=asyncio.get_running_loop().time(),
             dropped_frames=0,
@@ -190,28 +192,27 @@ class HudServer:
                     self._logger.exception("Failed to compute RMS for ESP32 %s role=%s", state.device_id, state.role)
 
                 # Enqueue audio for downstream processing (STT/classification).
-                if state.audio_q.full():
+                if state.stt_q.full():
                     try:
-                        _ = state.audio_q.get_nowait()
+                        _ = state.stt_q.get_nowait()
                         state.dropped_frames += 1
                     except asyncio.QueueEmpty:
                         pass
                 try:
-                    state.audio_q.put_nowait(bytes(msg))
+                    state.stt_q.put_nowait(bytes(msg))
                 except asyncio.QueueFull:
                     state.dropped_frames += 1
 
-                # Feed analysis pipeline from the left channel by default.
-                if state.role == "left":
-                    if self._analysis_left_q.full():
-                        try:
-                            _ = self._analysis_left_q.get_nowait()
-                        except asyncio.QueueEmpty:
-                            pass
+                if state.analysis_q.full():
                     try:
-                        self._analysis_left_q.put_nowait(bytes(msg))
-                    except asyncio.QueueFull:
+                        _ = state.analysis_q.get_nowait()
+                    except asyncio.QueueEmpty:
                         pass
+                try:
+                    state.analysis_q.put_nowait(bytes(msg))
+                except asyncio.QueueFull:
+                    # Not critical; analysis can drop.
+                    pass
         finally:
             cur = self._esp32_by_role.get(hello_role)
             if cur and cur.device_id == hello_device_id:
@@ -251,6 +252,8 @@ class HudServer:
                     "frameMs": s.frame_ms,
                     "lastRms": s.last_rms,
                     "droppedFrames": s.dropped_frames,
+                    "sttQueue": s.stt_q.qsize(),
+                    "analysisQueue": s.analysis_q.qsize(),
                 }
                 for role, s in self._esp32_by_role.items()
             }
@@ -281,14 +284,26 @@ class HudServer:
         stt = ElevenLabsRealtimeStt(cfg)
 
         async def audio_frames() -> Any:
-            # Default: prefer left, fallback to right.
+            active_role = "left"
             while True:
-                state = self._esp32_by_role.get("left") or self._esp32_by_role.get("right")
+                left = self._esp32_by_role.get("left")
+                right = self._esp32_by_role.get("right")
+                if left and right:
+                    l = left.last_rms
+                    r = right.last_rms
+                    if active_role == "left" and r > l * 1.5:
+                        active_role = "right"
+                    elif active_role == "right" and l > r * 1.5:
+                        active_role = "left"
+
+                preferred = self._esp32_by_role.get(active_role)
+                fallback = self._esp32_by_role.get("right" if active_role == "left" else "left")
+                state = preferred or fallback
                 if state is None:
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(0.05)
                     continue
                 try:
-                    frame = await asyncio.wait_for(state.audio_q.get(), timeout=0.5)
+                    frame = await asyncio.wait_for(state.stt_q.get(), timeout=0.25)
                 except asyncio.CancelledError:
                     raise
                 except asyncio.TimeoutError:
@@ -354,9 +369,32 @@ class HudServer:
         loop = asyncio.get_running_loop()
         next_eval = loop.time()
 
+        active_role = "left"
         while True:
-            # Ingest audio frames from left channel queue.
-            frame_bytes = await self._analysis_left_q.get()
+            # Choose an analysis source (stickiness + fallback to avoid blocking).
+            left = self._esp32_by_role.get("left")
+            right = self._esp32_by_role.get("right")
+            if left and right:
+                if active_role == "left" and right.last_rms > left.last_rms * 1.5:
+                    active_role = "right"
+                elif active_role == "right" and left.last_rms > right.last_rms * 1.5:
+                    active_role = "left"
+
+            preferred = self._esp32_by_role.get(active_role)
+            fallback = self._esp32_by_role.get("right" if active_role == "left" else "left")
+
+            frame_bytes: bytes | None = None
+            for state in (preferred, fallback):
+                if state is None:
+                    continue
+                try:
+                    frame_bytes = await asyncio.wait_for(state.analysis_q.get(), timeout=0.25)
+                    break
+                except asyncio.TimeoutError:
+                    continue
+
+            if frame_bytes is None:
+                continue
             frame = pcm16le_bytes_to_float32(frame_bytes)
             if frame.size == 0:
                 continue
