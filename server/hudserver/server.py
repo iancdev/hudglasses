@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -119,9 +118,9 @@ class HudServer:
                     except Exception:
                         continue
                     self._head_pose = HeadPoseState(
-                        yaw_deg=self._yaw_to_degrees(yaw),
-                        pitch_deg=self._yaw_to_degrees(pitch),
-                        roll_deg=self._yaw_to_degrees(roll),
+                        yaw_deg=yaw,
+                        pitch_deg=pitch,
+                        roll_deg=roll,
                         last_seen_monotonic=asyncio.get_running_loop().time(),
                     )
                 elif msg_type == "config.update":
@@ -507,12 +506,6 @@ class HudServer:
 
     def _current_direction_payload(self) -> dict[str, Any]:
         return dict(self._latest_direction_payload)
-
-    def _yaw_to_degrees(self, value: float) -> float:
-        # Heuristic: SDK may report Euler in radians (~[-pi, pi]) or degrees (~[-180, 180]).
-        if abs(value) < 8.0:
-            return value * (180.0 / math.pi)
-        return value
 
     def _wrap_deg(self, deg: float) -> float:
         return ((deg + 180.0) % 360.0) - 180.0
