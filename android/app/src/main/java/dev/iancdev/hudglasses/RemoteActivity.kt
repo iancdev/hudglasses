@@ -293,7 +293,7 @@ private fun RemoteUi(
         }
 
         Text("Partial: ${state.subtitlePartial}")
-        Text("Lines: ${state.subtitleLines.takeLast(3).joinToString(\" | \")}")
+        Text("Lines: ${state.subtitleLines.takeLast(3).joinToString(" | ")}")
 
         Text("Direction: ${"%.1f".format(state.directionDeg)}°  intensity=${"%.2f".format(state.intensity)}")
     }
