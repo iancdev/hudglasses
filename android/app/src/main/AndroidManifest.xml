@@ -12,6 +12,7 @@
     <application
         android:allowBackup="true"
         android:label="HUD Glasses"
+        android:usesCleartextTraffic="true"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
