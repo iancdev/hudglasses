@@ -14,8 +14,12 @@ This Android app:
    - Place it at `android/app/libs/VITURE-SDK-1.0.7.aar`
 3) Connect Viture glasses via USB‑C.
 
+## Build Variants
+This project has 2 product flavors:
+- `nosdk` (default for CI/CLI): builds without the Viture SDK; IMU/head tracking is disabled.
+- `viture`: builds with the Viture SDK AAR; enables IMU/head tracking.
+
 ## Run
 - Launch the app on the phone (Pixel 8a target).
 - The phone UI is a remote controller.
 - The HUD should appear on the Viture display when detected as an external display.
-

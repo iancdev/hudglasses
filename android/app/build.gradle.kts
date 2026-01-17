@@ -15,6 +15,16 @@ android {
         versionName = "0.1"
     }
 
+    flavorDimensions += "viture"
+    productFlavors {
+        create("nosdk") {
+            dimension = "viture"
+        }
+        create("viture") {
+            dimension = "viture"
+        }
+    }
+
     buildFeatures {
         compose = true
     }
@@ -30,7 +40,7 @@ android {
 
 dependencies {
     // Viture SDK (download and place into app/libs)
-    implementation(files("libs/VITURE-SDK-1.0.7.aar"))
+    vitureImplementation(files("libs/VITURE-SDK-1.0.7.aar"))
 
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-compose:1.9.0")
