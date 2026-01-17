@@ -1,0 +1,95 @@
+package dev.iancdev.hudglasses
+
+import android.app.Presentation
+import android.content.Context
+import android.os.Bundle
+import android.view.Display
+import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+
+class HudPresentation(context: Context, display: Display) : Presentation(context, display) {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        val compose = ComposeView(context).apply {
+            setContent { HudUi() }
+        }
+        setContentView(compose, android.view.ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+    }
+}
+
+@Composable
+private fun HudUi() {
+    val state by HudStore.state.collectAsState()
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        Radar(state)
+        Subtitles(state)
+        EdgeGlow(state)
+    }
+}
+
+@Composable
+private fun Radar(state: HudState) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val center = Offset(size.width * 0.5f, size.height * 0.35f)
+        val radius = size.minDimension * 0.12f
+        drawCircle(color = Color(0xFF2A2A2A), radius = radius, center = center)
+        val dot = Offset(center.x + state.radarX * radius, center.y - state.radarY * radius)
+        drawCircle(color = Color.White, radius = 10f, center = dot, alpha = 0.9f)
+    }
+}
+
+@Composable
+private fun Subtitles(state: HudState) {
+    val text = buildString {
+        if (state.subtitleLines.isNotEmpty()) {
+            append(state.subtitleLines.takeLast(2).joinToString("\n"))
+            append("\n")
+        }
+        append(state.subtitlePartial)
+    }.trim()
+
+    Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+        Text(
+            text = text,
+            color = Color.White,
+            style = MaterialTheme.typography.headlineSmall,
+            textAlign = TextAlign.Start,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun EdgeGlow(state: HudState) {
+    val glow = when {
+        state.fireAlarm != "idle" -> Color.Red
+        state.carHorn != "idle" -> Color.Yellow
+        else -> Color.White
+    }
+    val alpha = state.glowStrength.coerceIn(0f, 1f) * 0.6f
+    if (alpha <= 0f) return
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(glow.copy(alpha = alpha * 0.08f)),
+    )
+}
+
