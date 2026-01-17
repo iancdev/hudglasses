@@ -138,10 +138,14 @@ class WsController(
     }
 
     private fun handleAlarm(obj: JSONObject, isFire: Boolean) {
-        val state = obj.optString("state", "ongoing")
+        val stateRaw = obj.optString("state", "ongoing")
+        val state = when (stateRaw) {
+            "started", "ongoing" -> "active"
+            "ended" -> "idle"
+            else -> stateRaw
+        }
         HudStore.update {
             if (isFire) it.copy(fireAlarm = state) else it.copy(carHorn = state)
         }
     }
 }
-
