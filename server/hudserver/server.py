@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -31,6 +32,14 @@ class Esp32AudioState:
     dropped_frames: int
 
 
+@dataclass(slots=True)
+class HeadPoseState:
+    yaw_deg: float
+    pitch_deg: float
+    roll_deg: float
+    last_seen_monotonic: float
+
+
 class HudServer:
     def __init__(self, host: str, port: int, log_level: str = "INFO") -> None:
         setup_logging(log_level)
@@ -43,6 +52,14 @@ class HudServer:
         self._android_stt: set[ServerConnection] = set()
 
         self._esp32_by_role: dict[str, Esp32AudioState] = {}
+        self._head_pose: HeadPoseState | None = None
+
+        self._world_direction_deg: float | None = None
+        self._latest_direction_payload: dict[str, Any] = {}
+
+        self._alarm_rms_threshold: float = float(os.environ.get("ALARM_RMS_THRESHOLD", "0.02"))
+        self._fire_ratio_threshold: float = float(os.environ.get("FIRE_BAND_RATIO_THRESHOLD", "0.18"))
+        self._horn_ratio_threshold: float = float(os.environ.get("HORN_BAND_RATIO_THRESHOLD", "0.20"))
 
         self._stop = asyncio.Event()
 
@@ -90,10 +107,28 @@ class HudServer:
                 if not isinstance(msg, str):
                     continue
                 try:
-                    _obj = loads(msg)
+                    obj = loads(msg)
                 except Exception:
                     continue
-                # TODO: config.update / head_pose support in later iterations.
+                msg_type = obj.get("type")
+                if msg_type == "head_pose":
+                    try:
+                        yaw = float(obj.get("yaw"))
+                        pitch = float(obj.get("pitch"))
+                        roll = float(obj.get("roll"))
+                    except Exception:
+                        continue
+                    self._head_pose = HeadPoseState(
+                        yaw_deg=self._yaw_to_degrees(yaw),
+                        pitch_deg=self._yaw_to_degrees(pitch),
+                        roll_deg=self._yaw_to_degrees(roll),
+                        last_seen_monotonic=asyncio.get_running_loop().time(),
+                    )
+                elif msg_type == "config.update":
+                    # Optional tuning knobs for demo.
+                    self._alarm_rms_threshold = float(obj.get("alarmRmsThreshold", self._alarm_rms_threshold))
+                    self._fire_ratio_threshold = float(obj.get("fireRatioThreshold", self._fire_ratio_threshold))
+                    self._horn_ratio_threshold = float(obj.get("hornRatioThreshold", self._horn_ratio_threshold))
         finally:
             self._android_events.discard(conn)
             self._logger.info("Android /events disconnected from %s", conn.remote_address)
@@ -257,12 +292,20 @@ class HudServer:
                 }
                 for role, s in self._esp32_by_role.items()
             }
+            head_pose = None
+            if self._head_pose is not None:
+                head_pose = {
+                    "yawDeg": self._head_pose.yaw_deg,
+                    "pitchDeg": self._head_pose.pitch_deg,
+                    "rollDeg": self._head_pose.roll_deg,
+                }
             await self._broadcast_events(
                 {
                     "type": "status",
                     "server": "ok",
                     "android": {"eventsClients": len(self._android_events), "sttClients": len(self._android_stt)},
                     "esp32": esp32,
+                    "headPose": head_pose,
                 }
             )
 
@@ -339,18 +382,19 @@ class HudServer:
             total = l + r + 1e-6
             balance = (r - l) / total  # -1..+1
 
-            direction_deg = float(np.clip(balance * 90.0, -90.0, 90.0))
+            raw_direction_deg = float(np.clip(balance * 90.0, -90.0, 90.0))
             intensity = float(np.clip(total * 2.5, 0.0, 1.0))  # heuristic gain
 
+            direction_deg = self._stabilize_direction(raw_direction_deg)
             ui = self._direction_to_ui(direction_deg, intensity)
-            await self._broadcast_events(
-                {
-                    "type": "direction.ui",
-                    "directionDeg": direction_deg,
-                    "intensity": intensity,
-                    **ui,
-                }
-            )
+            payload = {
+                "directionDeg": direction_deg,
+                "rawDirectionDeg": raw_direction_deg,
+                "intensity": intensity,
+                **ui,
+            }
+            self._latest_direction_payload = payload
+            await self._broadcast_events({"type": "direction.ui", **payload})
 
     async def _alarms_loop(self) -> None:
         """Very lightweight audio heuristics for hackathon demo."""
@@ -414,8 +458,8 @@ class HudServer:
             fire_ratio = band_power_ratio(buf, sample_rate_hz, (2500.0, 3500.0))
             horn_ratio = band_power_ratio(buf, sample_rate_hz, (300.0, 900.0))
 
-            fire_detected = total_rms > 0.02 and fire_ratio > 0.18
-            horn_detected = total_rms > 0.02 and horn_ratio > 0.20
+            fire_detected = total_rms > self._alarm_rms_threshold and fire_ratio > self._fire_ratio_threshold
+            horn_detected = total_rms > self._alarm_rms_threshold and horn_ratio > self._horn_ratio_threshold
 
             if fire_detected:
                 fire_last_positive = now
@@ -462,14 +506,32 @@ class HudServer:
         }
 
     def _current_direction_payload(self) -> dict[str, Any]:
-        left = self._esp32_by_role.get("left")
-        right = self._esp32_by_role.get("right")
-        if not left or not right:
-            return {}
-        l = max(0.0, left.last_rms)
-        r = max(0.0, right.last_rms)
-        total = l + r + 1e-6
-        balance = (r - l) / total
-        direction_deg = float(np.clip(balance * 90.0, -90.0, 90.0))
-        intensity = float(np.clip(total * 2.5, 0.0, 1.0))
-        return {"directionDeg": direction_deg, "intensity": intensity, **self._direction_to_ui(direction_deg, intensity)}
+        return dict(self._latest_direction_payload)
+
+    def _yaw_to_degrees(self, value: float) -> float:
+        # Heuristic: SDK may report Euler in radians (~[-pi, pi]) or degrees (~[-180, 180]).
+        if abs(value) < 8.0:
+            return value * (180.0 / math.pi)
+        return value
+
+    def _wrap_deg(self, deg: float) -> float:
+        return ((deg + 180.0) % 360.0) - 180.0
+
+    def _lerp_angle(self, a_deg: float, b_deg: float, t: float) -> float:
+        delta = self._wrap_deg(b_deg - a_deg)
+        return self._wrap_deg(a_deg + delta * t)
+
+    def _stabilize_direction(self, raw_direction_deg: float) -> float:
+        pose = self._head_pose
+        if pose is None:
+            self._world_direction_deg = None
+            return raw_direction_deg
+
+        yaw = pose.yaw_deg
+        world_estimate = self._wrap_deg(yaw + raw_direction_deg)
+        if self._world_direction_deg is None:
+            self._world_direction_deg = world_estimate
+        else:
+            self._world_direction_deg = self._lerp_angle(self._world_direction_deg, world_estimate, 0.2)
+
+        return self._wrap_deg(self._world_direction_deg - yaw)
