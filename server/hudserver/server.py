@@ -417,6 +417,9 @@ class HudServer:
             # Choose an analysis source (stickiness + fallback to avoid blocking).
             left = self._esp32_by_role.get("left")
             right = self._esp32_by_role.get("right")
+            if not left and not right:
+                await asyncio.sleep(0.05)
+                continue
             if left and right:
                 if active_role == "left" and right.last_rms > left.last_rms * 1.5:
                     active_role = "right"
@@ -437,6 +440,7 @@ class HudServer:
                     continue
 
             if frame_bytes is None:
+                await asyncio.sleep(0.01)
                 continue
             frame = pcm16le_bytes_to_float32(frame_bytes)
             if frame.size == 0:
