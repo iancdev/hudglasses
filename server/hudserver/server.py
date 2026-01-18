@@ -166,6 +166,7 @@ class HudServer:
             "yes",
             "on",
         )
+        self._reset_alarm_state_on_connect: bool = not self._enable_heuristic_alarms
 
         self._stop = asyncio.Event()
 
@@ -224,6 +225,11 @@ class HudServer:
         )
         try:
             await conn.send(dumps({"type": "status", "server": "connected"}))
+            if self._reset_alarm_state_on_connect:
+                # If heuristic alarms are disabled, make sure connected clients don't
+                # remain "stuck" in a previous active state.
+                await conn.send(dumps({"type": "alarm.fire", "state": "ended", **self._current_direction_payload()}))
+                await conn.send(dumps({"type": "alarm.car_horn", "state": "ended", **self._current_direction_payload()}))
             async for msg in conn:
                 if not isinstance(msg, str):
                     continue
