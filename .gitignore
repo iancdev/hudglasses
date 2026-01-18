@@ -19,3 +19,4 @@ VitureSDK/aar/
 VitureSDK/VITURESensorDemo/
 VitureSDK/*.pdf
 VitureSDK/*.tar.*
+.env
