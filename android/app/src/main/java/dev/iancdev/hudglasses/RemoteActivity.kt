@@ -507,6 +507,15 @@ private fun RemoteUi(
         Text("Partial: ${state.subtitlePartial}")
         Text("Lines: ${state.subtitleLines.takeLast(3).joinToString(" | ")}")
 
+        run {
+            val w = state.hudWidthPx
+            val h = state.hudHeightPx
+            val dpi = state.hudDensityDpi
+            val size = if (w != null && h != null) "${w}x${h}px" else "n/a"
+            val dpiStr = dpi?.toString() ?: "n/a"
+            Text("HUD display: $size  dpi=$dpiStr")
+        }
+
         Text("Direction: ${"%.1f".format(state.directionDeg)}°  intensity=${"%.2f".format(state.intensity)}")
     }
 }
