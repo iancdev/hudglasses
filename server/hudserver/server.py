@@ -73,7 +73,7 @@ class HudServer:
         self._android_mic_by_conn: dict[ServerConnection, AndroidMicState] = {}
 
         # STT audio input selection:
-        # - "auto": prefer Android mic if present, else ESP32
+        # - "auto": prefer ESP32 if present, else Android mic
         # - "android_mic": only Android mic
         # - "esp32": only ESP32
         self._stt_audio_source: str = (os.environ.get("STT_AUDIO_SOURCE") or "auto").strip().lower()
@@ -502,6 +502,39 @@ class HudServer:
             active_role = "left"
             while True:
                 source = self._stt_audio_source
+
+                # 1) ESP32 first (auto + esp32-only)
+                if source in ("auto", "esp32"):
+                    left = self._esp32_by_role.get("left")
+                    right = self._esp32_by_role.get("right")
+                    if left and right:
+                        l = left.last_rms
+                        r = right.last_rms
+                        if active_role == "left" and r > l * 1.5:
+                            active_role = "right"
+                        elif active_role == "right" and l > r * 1.5:
+                            active_role = "left"
+
+                    preferred = self._esp32_by_role.get(active_role)
+                    fallback = self._esp32_by_role.get("right" if active_role == "left" else "left")
+                    state = preferred or fallback
+                    if state is not None:
+                        try:
+                            frame = await asyncio.wait_for(state.stt_q.get(), timeout=0.25)
+                        except asyncio.CancelledError:
+                            raise
+                        except asyncio.TimeoutError:
+                            # If user explicitly selected ESP32, don't fall back automatically.
+                            if source == "esp32":
+                                continue
+                        else:
+                            yield frame
+                            continue
+                    elif source == "esp32":
+                        await asyncio.sleep(0.05)
+                        continue
+
+                # 2) Android mic fallback (auto + android-only)
                 if source in ("auto", "android_mic"):
                     if self._android_mic_by_conn:
                         mic = max(self._android_mic_by_conn.values(), key=lambda s: s.last_seen_monotonic)
@@ -520,29 +553,7 @@ class HudServer:
                         await asyncio.sleep(0.05)
                         continue
 
-                left = self._esp32_by_role.get("left")
-                right = self._esp32_by_role.get("right")
-                if left and right:
-                    l = left.last_rms
-                    r = right.last_rms
-                    if active_role == "left" and r > l * 1.5:
-                        active_role = "right"
-                    elif active_role == "right" and l > r * 1.5:
-                        active_role = "left"
-
-                preferred = self._esp32_by_role.get(active_role)
-                fallback = self._esp32_by_role.get("right" if active_role == "left" else "left")
-                state = preferred or fallback
-                if state is None:
-                    await asyncio.sleep(0.05)
-                    continue
-                try:
-                    frame = await asyncio.wait_for(state.stt_q.get(), timeout=0.25)
-                except asyncio.CancelledError:
-                    raise
-                except asyncio.TimeoutError:
-                    continue
-                yield frame
+                await asyncio.sleep(0.01)
 
         def compute_delta_words(current_text: str) -> list[str]:
             nonlocal last_partial_words
