@@ -19,10 +19,33 @@ class HapticsController(
         context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
     }
 
+    private var enabled: Boolean = true
+    private var directionEnabled: Boolean = false
     private var lastBuzzMs: Long = 0
     private var lastDirectionDeg: Float = 0f
 
+    fun setEnabled(enabled: Boolean) {
+        this.enabled = enabled
+        if (!enabled) {
+            stop()
+        }
+    }
+
+    fun setDirectionEnabled(enabled: Boolean) {
+        this.directionEnabled = enabled
+        if (!enabled) {
+            lastDirectionDeg = 0f
+        }
+    }
+
+    fun stop() {
+        runCatching { vibrator.cancel() }
+        lastBuzzMs = 0
+        lastDirectionDeg = 0f
+    }
+
     fun onEvent(evt: HudEvent) {
+        if (!enabled) return
         when (evt) {
             is HudEvent.EventsMessage -> handleEvents(evt.json)
             is HudEvent.SttMessage -> Unit
@@ -41,6 +64,7 @@ class HapticsController(
                 buzz(pattern = longArrayOf(0, 120, 80, 120, 80, 120))
             }
             "direction.ui" -> {
+                if (!directionEnabled) return
                 val intensity = obj.optDouble("intensity", 0.0).toFloat()
                 val direction = obj.optDouble("directionDeg", 0.0).toFloat()
                 if (intensity < 0.25f) return

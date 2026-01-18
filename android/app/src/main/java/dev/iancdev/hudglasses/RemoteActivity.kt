@@ -78,6 +78,8 @@ class RemoteActivity : ComponentActivity() {
         refreshHudDisplay()
 
         hapticsController = HapticsController(this)
+        hapticsController.setEnabled(HudStore.state.value.phoneHapticsEnabled)
+        hapticsController.setDirectionEnabled(HudStore.state.value.phoneDirectionHapticsEnabled)
         wsController = WsController(
             onEvents = { evt -> hapticsController.onEvent(evt) },
         )
@@ -122,6 +124,8 @@ class RemoteActivity : ComponentActivity() {
                         onConnect = { wsController.connect(HudStore.state.value.serverUrl) },
                         onDisconnect = { wsController.disconnect() },
                         onSetPhoneAudioFallbackEnabled = { enabled -> setPhoneAudioFallbackEnabled(enabled) },
+                        onSetPhoneHapticsEnabled = { enabled -> setPhoneHapticsEnabled(enabled) },
+                        onSetPhoneDirectionHapticsEnabled = { enabled -> setPhoneDirectionHapticsEnabled(enabled) },
                         onSetPhoneMicSource = { source -> setPhoneMicSource(source) },
                         onSetVitureImu = { enabled -> vitureImuController.setImuEnabled(enabled) },
                         onSetViture3d = { enabled -> vitureImuController.set3dEnabled(enabled) },
@@ -183,6 +187,7 @@ class RemoteActivity : ComponentActivity() {
         vitureImuController.stop()
         vitureImuController.release()
         wsController.close()
+        hapticsController.stop()
         phoneAudioStreamer.close()
         hudPresentation?.dismiss()
         hudPresentation = null
@@ -224,6 +229,16 @@ class RemoteActivity : ComponentActivity() {
                 .put("type", "audio.source")
                 .put("source", "auto")
         )
+    }
+
+    private fun setPhoneHapticsEnabled(enabled: Boolean) {
+        HudStore.update { it.copy(phoneHapticsEnabled = enabled) }
+        hapticsController.setEnabled(enabled)
+    }
+
+    private fun setPhoneDirectionHapticsEnabled(enabled: Boolean) {
+        HudStore.update { it.copy(phoneDirectionHapticsEnabled = enabled) }
+        hapticsController.setDirectionEnabled(enabled)
     }
 
     private fun enablePhoneAudioFallbackInternal() {
@@ -299,6 +314,8 @@ private fun RemoteUi(
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onSetPhoneAudioFallbackEnabled: (Boolean) -> Unit,
+    onSetPhoneHapticsEnabled: (Boolean) -> Unit,
+    onSetPhoneDirectionHapticsEnabled: (Boolean) -> Unit,
     onSetPhoneMicSource: (Int) -> Unit,
     onSetVitureImu: (Boolean) -> Unit,
     onSetViture3d: (Boolean) -> Unit,
@@ -327,6 +344,21 @@ private fun RemoteUi(
             Switch(
                 checked = state.phoneAudioFallbackEnabled,
                 onCheckedChange = onSetPhoneAudioFallbackEnabled,
+            )
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Phone Haptics")
+            Switch(
+                checked = state.phoneHapticsEnabled,
+                onCheckedChange = onSetPhoneHapticsEnabled,
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Directional Haptics (from radar)")
+            Switch(
+                checked = state.phoneDirectionHapticsEnabled,
+                onCheckedChange = onSetPhoneDirectionHapticsEnabled,
             )
         }
 
@@ -398,7 +430,7 @@ private fun RemoteUi(
         Text("ESP32 L: ${if (state.esp32ConnectedLeft) "connected" else "missing"}")
         Text("ESP32 R: ${if (state.esp32ConnectedRight) "connected" else "missing"}")
         Text("Wristband (ESP-NOW bridge): ${if (state.wristbandConnected) "connected" else "disconnected"}")
-        Text("Phone vibration fallback: enabled")
+        Text("Phone haptics: ${if (state.phoneHapticsEnabled) "on" else "off"} (direction=${if (state.phoneDirectionHapticsEnabled) "on" else "off"})")
         if (state.serverStatus.isNotBlank()) {
             Text("Server: ${state.serverStatus}")
         }
