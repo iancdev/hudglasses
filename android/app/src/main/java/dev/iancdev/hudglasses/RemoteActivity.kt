@@ -1,13 +1,10 @@
 package dev.iancdev.hudglasses
 
-import android.Manifest
 import android.content.Context
 import android.hardware.display.DisplayManager
-import android.os.Build
 import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.activity.ComponentActivity
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -31,7 +28,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.UUID
 
 class RemoteActivity : ComponentActivity() {
     private var hudPresentation: HudPresentation? = null
@@ -39,15 +35,6 @@ class RemoteActivity : ComponentActivity() {
     private lateinit var wsController: WsController
     private lateinit var vitureImuController: VitureImuController
     private lateinit var hapticsController: HapticsController
-    private lateinit var wristbandController: WristbandController
-
-    private val blePermsLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { granted ->
-        val ok = granted.values.all { it }
-        if (!ok) return@registerForActivityResult
-        connectWristbandInternal()
-    }
 
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) = refreshHudDisplay()
@@ -63,8 +50,7 @@ class RemoteActivity : ComponentActivity() {
 
         refreshHudDisplay()
 
-        wristbandController = WristbandController(this)
-        hapticsController = HapticsController(this, wristbandController)
+        hapticsController = HapticsController(this)
         wsController = WsController(
             onEvents = { evt -> hapticsController.onEvent(evt) },
         )
@@ -93,8 +79,6 @@ class RemoteActivity : ComponentActivity() {
                     RemoteUi(
                         onConnect = { wsController.connect(HudStore.state.value.serverUrl) },
                         onDisconnect = { wsController.disconnect() },
-                        onConnectWristband = { connectWristband() },
-                        onDisconnectWristband = { wristbandController.disconnect() },
                         onSetVitureImu = { enabled -> vitureImuController.setImuEnabled(enabled) },
                         onSetViture3d = { enabled -> vitureImuController.set3dEnabled(enabled) },
                         onSetVitureImuFreq = { mode -> vitureImuController.setImuFrequency(mode) },
@@ -149,7 +133,6 @@ class RemoteActivity : ComponentActivity() {
         vitureImuController.stop()
         vitureImuController.release()
         wsController.close()
-        wristbandController.disconnect()
         hudPresentation?.dismiss()
         hudPresentation = null
     }
@@ -169,38 +152,12 @@ class RemoteActivity : ComponentActivity() {
         hudPresentation?.dismiss()
         hudPresentation = HudPresentation(this, external).also { it.show() }
     }
-
-    private fun connectWristband() {
-        val perms = requiredBlePermissions()
-        if (perms.isEmpty()) {
-            connectWristbandInternal()
-            return
-        }
-        blePermsLauncher.launch(perms)
-    }
-
-    private fun connectWristbandInternal() {
-        val state = HudStore.state.value
-        val serviceUuid = runCatching { UUID.fromString(state.wristbandServiceUuid) }.getOrNull() ?: return
-        val charUuid = runCatching { UUID.fromString(state.wristbandCommandCharUuid) }.getOrNull() ?: return
-        wristbandController.connectByScan(state.wristbandNamePrefix, serviceUuid, charUuid)
-    }
-
-    private fun requiredBlePermissions(): Array<String> {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            arrayOf(Manifest.permission.BLUETOOTH, Manifest.permission.BLUETOOTH_ADMIN)
-        }
-    }
 }
 
 @Composable
 private fun RemoteUi(
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
-    onConnectWristband: () -> Unit,
-    onDisconnectWristband: () -> Unit,
     onSetVitureImu: (Boolean) -> Unit,
     onSetViture3d: (Boolean) -> Unit,
     onSetVitureImuFreq: (Int) -> Unit,
@@ -210,7 +167,6 @@ private fun RemoteUi(
 ) {
     val state by HudStore.state.collectAsState()
     var url by remember(state.serverUrl) { mutableStateOf(state.serverUrl) }
-    var wbPrefix by remember(state.wristbandNamePrefix) { mutableStateOf(state.wristbandNamePrefix) }
     var rmsStr by remember(state.alarmRmsThreshold) { mutableStateOf(state.alarmRmsThreshold.toString()) }
     var fireStr by remember(state.fireRatioThreshold) { mutableStateOf(state.fireRatioThreshold.toString()) }
     var hornStr by remember(state.hornRatioThreshold) { mutableStateOf(state.hornRatioThreshold.toString()) }
@@ -278,30 +234,13 @@ private fun RemoteUi(
         }
         Text("ESP32 L: ${if (state.esp32ConnectedLeft) "connected" else "missing"}")
         Text("ESP32 R: ${if (state.esp32ConnectedRight) "connected" else "missing"}")
-        Text("Wristband: ${if (state.wristbandConnected) "connected" else "disconnected"}")
+        Text("Wristband (ESP-NOW bridge): ${if (state.wristbandConnected) "connected" else "disconnected"}")
+        Text("Phone vibration fallback: enabled")
         if (state.serverStatus.isNotBlank()) {
             Text("Server: ${state.serverStatus}")
         }
         if (state.sttError.isNotBlank()) {
             Text("STT error: ${state.sttError}")
-        }
-
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = wbPrefix,
-                onValueChange = { wbPrefix = it },
-                label = { Text("Wristband name prefix") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
-            Button(onClick = { HudStore.update { it.copy(wristbandNamePrefix = wbPrefix) } }) {
-                Text("Set")
-            }
-        }
-
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Button(onClick = onConnectWristband) { Text("Connect Wristband") }
-            Button(onClick = onDisconnectWristband) { Text("Disconnect Wristband") }
         }
 
         Text("Alarm thresholds (server tuning)")

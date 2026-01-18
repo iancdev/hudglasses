@@ -13,7 +13,7 @@ class VitureImuController(
     private val onPose: (Pose) -> Unit,
     private val onSdkState: (VitureSdkState) -> Unit,
 ) {
-    private val arManager: ArManager = ArManager.getInstance(context)
+    private var arManager: ArManager? = null
     private var started = false
     private var initialized = false
     private var defaultsApplied = false
@@ -58,15 +58,32 @@ class VitureImuController(
     fun start() {
         if (started) return
         started = true
-        arManager.setLogOn(true)
-        arManager.registerCallback(callback)
 
-        val initResult = arManager.init()
-        onSdkState(VitureSdkState(initResult = initResult))
-        if (initResult == Constants.ERROR_INIT_SUCCESS) {
-            initialized = true
-            refreshDeviceState()
-            applyDefaultsOnce()
+        val mgr = try {
+            arManager ?: ArManager.getInstance(context).also { arManager = it }
+        } catch (t: Throwable) {
+            Log.e("VitureImu", "failed to get ArManager", t)
+            started = false
+            onSdkState(VitureSdkState(initResult = -999))
+            return
+        }
+
+        try {
+            mgr.setLogOn(true)
+            mgr.registerCallback(callback)
+
+            val initResult = mgr.init()
+            onSdkState(VitureSdkState(initResult = initResult))
+            if (initResult == Constants.ERROR_INIT_SUCCESS) {
+                initialized = true
+                refreshDeviceState()
+                applyDefaultsOnce()
+            }
+        } catch (t: Throwable) {
+            Log.e("VitureImu", "start failed", t)
+            runCatching { mgr.unregisterCallback(callback) }
+            started = false
+            onSdkState(VitureSdkState(initResult = -999))
         }
     }
 
@@ -76,31 +93,31 @@ class VitureImuController(
     fun stop() {
         if (!started) return
         started = false
-        arManager.unregisterCallback(callback)
+        runCatching { arManager?.unregisterCallback(callback) }
     }
 
     fun release() {
         // Mirrors the SDK demo: release on destroy.
-        arManager.release()
+        runCatching { arManager?.release() }
     }
 
     fun setImuEnabled(enabled: Boolean) {
         if (!initialized) return
-        val rc = arManager.setImuOn(enabled)
+        val rc = arManager?.setImuOn(enabled) ?: return
         Log.i("VitureImu", "setImuOn($enabled) rc=$rc")
         refreshDeviceState()
     }
 
     fun set3dEnabled(enabled: Boolean) {
         if (!initialized) return
-        val rc = arManager.set3D(enabled)
+        val rc = arManager?.set3D(enabled) ?: return
         Log.i("VitureImu", "set3D($enabled) rc=$rc")
         refreshDeviceState()
     }
 
     fun setImuFrequency(mode: Int) {
         if (!initialized) return
-        val rc = arManager.setImuFrequency(mode)
+        val rc = arManager?.setImuFrequency(mode) ?: return
         Log.i("VitureImu", "setImuFrequency($mode) rc=$rc")
         refreshDeviceState()
     }
@@ -116,17 +133,18 @@ class VitureImuController(
     private fun applyDefaultsOnce() {
         if (defaultsApplied) return
         defaultsApplied = true
+        val mgr = arManager ?: return
 
         // For HUD mode we prefer 2D output (1920x1080) so the UI isn't stretched across 3D SBS.
-        val set3dRc = arManager.set3D(false)
+        val set3dRc = mgr.set3D(false)
         Log.i("VitureImu", "default set3D(false) rc=$set3dRc")
 
         // Enable IMU reporting by default.
-        val imuRc = arManager.setImuOn(true)
+        val imuRc = mgr.setImuOn(true)
         Log.i("VitureImu", "default setImuOn(true) rc=$imuRc")
 
         // Choose a conservative IMU frequency by default.
-        val freqRc = arManager.setImuFrequency(Constants.IMU_FREQUENCE_60)
+        val freqRc = mgr.setImuFrequency(Constants.IMU_FREQUENCE_60)
         Log.i("VitureImu", "default setImuFrequency(60Hz) rc=$freqRc")
 
         refreshDeviceState()
@@ -134,10 +152,11 @@ class VitureImuController(
 
     private fun refreshDeviceState() {
         if (!initialized) return
+        val mgr = arManager ?: return
         val state = VitureSdkState(
-            imuState = arManager.getImuState(),
-            stereo3dState = arManager.get3DState(),
-            imuFrequency = arManager.getCurImuFrequency(),
+            imuState = mgr.getImuState(),
+            stereo3dState = mgr.get3DState(),
+            imuFrequency = mgr.getCurImuFrequency(),
         )
         onSdkState(state)
     }

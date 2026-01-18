@@ -6,6 +6,7 @@ This Android app:
 - connects to the laptop server websockets:
   - `/events` for direction/alarm/status
   - `/stt` for transcripts
+- triggers **phone vibration** as a haptics fallback (wristband haptics are via ESP‑NOW bridge; see `docs/Wristband_Protocol.md`)
 
 ## Setup
 1) Open `android/` in Android Studio.

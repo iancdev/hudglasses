@@ -10,7 +10,8 @@ Docs:
 - Project overview: `docs/Draft.md` (takes precedence), `docs/PRD.MD`, `docs/PRD_Enhanced.MD`
 - Server plan: `docs/implementation_plan.md`
 - ESP32 audio protocol: `docs/ESP32_Protocol.md`
-- Wristband BLE protocol: `docs/Wristband_Protocol.md`
+- Wristband ESP-NOW protocol: `docs/Wristband_Protocol.md`
+  - Note: Android does not speak ESP‑NOW directly; use an ESP32 bridge if Android is the source.
 
 ## Quickstart (Demo)
 1) Start the laptop server:

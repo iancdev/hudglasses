@@ -16,7 +16,10 @@ Accepted hackathon architecture:
 - **Android app = HUD client + phone remote**
   - Renders the HUD on the **Viture external display only** (black background, landscape).
   - Uses the **phone screen as a remote UI** (settings, connection state, debug/calibration).
-  - Uses Viture SDK head tracking (IMU), drives wristband haptics.
+  - Uses Viture SDK head tracking (IMU).
+  - Haptics:
+    - phone vibration fallback (demo-friendly), and/or
+    - wristband haptics via an ESP‑NOW bridge (Android does not speak ESP‑NOW directly).
   - Electrochromic lens control: keep as a requirement from PRD, but **the Viture Android SDK v1.0.7 we reviewed only exposes IMU + 2D/3D mode** (no explicit electrochromic API found), so treat this as **“if supported by SDK/device”**.
 - **2× ESP32 = microphone streamers (Phase 1: required)**
   - Each ESP32 streams microphone audio to the laptop (`role = left|right`).
@@ -96,7 +99,8 @@ Android multi-display plan (standard Android; separate from the Viture SDK):
   - Car horn: show **YELLOW** direction on radar.
 
 ### 2.5 Wristband Haptics
-- Android connects to wristband via BLE (or via a microcontroller bridge if needed).
+- Wristband haptics use ESP-NOW (sender bridge → wristband).
+- Android does not speak ESP-NOW directly; if Android is the source, route through an ESP32 bridge.
 - Haptics encode direction (and optionally intensity):
   - Left/right/front patterns (simple pulses) + rate limiting (avoid constant buzzing).
 - Fallback (optional): phone vibration when wristband not connected (helps demo resiliency).
@@ -192,8 +196,8 @@ Responsibilities:
 - Head tracking:
   - Use Viture SDK (`ArManager` / `ArCallback.onImu`) to read yaw/pitch/roll.
   - Send `head_pose` to the server (recommended) so server-generated UI placement stays accurate as the user turns.
-- Wristband:
-  - BLE connect + write haptic patterns.
+  - Wristband:
+  - ESP-NOW sender bridge + send haptic patterns.
 
 ### 7.3 ESP32 Devices (Audio streamers)
 Responsibilities:
@@ -203,8 +207,8 @@ Responsibilities:
 
 ### 7.4 Wristband Device
 Responsibilities:
-- BLE peripheral receiving simple haptic commands:
-  - `{ pattern, intensity, durationMs }` (actual GATT UUID/payload to be defined with hardware team).
+- ESP-NOW receiver for simple haptic commands:
+  - `{ v, patternId, intensity, durationMs }` (see `docs/Wristband_Protocol.md`).
 
 ## 8) Milestones (Hackathon Execution Order)
 1) **HUD shell on Android/Viture**

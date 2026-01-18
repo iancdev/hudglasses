@@ -1,35 +1,43 @@
 # Wristband Haptics Protocol (Hackathon)
 
-This document defines what the Android app expects from the **wristband haptics device**.
+This document defines what the wristband haptics device expects over **ESP-NOW**.
 
-Goal: a wearable that can produce simple vibration patterns (left/right/front, alarms) when commanded by the phone.
+Goal: a wearable that can produce simple vibration patterns (left/right/front, alarms) when commanded by a sender device.
+
+Protocol version: `v: 1`
 
 ## 1) Transport
-BLE peripheral (wristband) + BLE central (Android phone).
+ESP-NOW (2.4 GHz). Connectionless peer-to-peer packets.
 
-## 2) Advertising
-The wristband should advertise with a device name prefix (default in app):
-- `HUD-Wristband`
+Roles:
+- **Sender**: ESP32 bridge (or other ESP-NOW-capable device).
+- **Receiver**: wristband device.
 
-The Android app scans and connects to the first device whose name starts with this prefix.
+Android does not speak ESP-NOW directly; if Android is the source of events, it must route through a bridge (out of scope here).
 
-## 3) GATT
-The Android app expects:
-- A single **custom service UUID** (default):
-  - `0000feed-0000-1000-8000-00805f9b34fb`
-- A single **writable characteristic UUID** for commands (default):
-  - `0000beef-0000-1000-8000-00805f9b34fb`
+## 2) Peer Setup (Required vs Optional)
+Required:
+- Receiver is configured to accept ESP-NOW packets on a fixed Wi‑Fi channel.
+- Sender is configured to use the same channel.
+- Receiver has the sender’s MAC address added as a peer.
 
-The characteristic should support Write With Response or Write Without Response (either is fine for hackathon).
+Optional (security):
+- Use a PMK/LMK pair if you want encryption. If used, both sides must share the same keys.
 
-## 4) Command Payload (v1)
-Android writes exactly 4 bytes (little endian) to the command characteristic:
+Default channel recommendation (can be changed by agreement): `1`
+
+## 3) Packet Format (v1)
+ESP-NOW payload is variable length. The **required** command payload is 5 bytes (little endian):
 
 | Byte | Name | Type | Notes |
 |---:|---|---|---|
-| 0 | `patternId` | `uint8` | Pattern selector |
-| 1 | `intensity` | `uint8` | 0..255 |
-| 2..3 | `durationMs` | `uint16_le` | 0..65535 |
+| 0 | `v` | `uint8` | Protocol version (`1`) |
+| 1 | `patternId` | `uint8` | Pattern selector |
+| 2 | `intensity` | `uint8` | 0..255 |
+| 3..4 | `durationMs` | `uint16_le` | 0..65535 |
+
+Optional trailer (if present, receiver should ignore extra bytes it doesn’t understand):
+- `seq` (`uint8`): monotonically increasing sequence number for de-duplication.
 
 ### Pattern IDs used by the app
 - `1`: direction left
@@ -40,11 +48,12 @@ Android writes exactly 4 bytes (little endian) to the command characteristic:
 
 You can support more IDs as desired; unknown IDs may be ignored.
 
-## 5) Behavior Expectations
+## 4) Behavior Expectations
 - Receiving a command should immediately start (or restart) the specified pattern for `durationMs`.
-- Repeated commands may arrive quickly; firmware should handle rapid updates gracefully.
+- Sender should **repeat** each command 2–3 times (short spacing) to improve reliability.
+- Receiver should handle quick bursts and may drop duplicate commands (use `seq` if provided).
 - If no command arrives for a while, the wristband should stop vibrating (no autonomous vibration).
 
-## 6) Notes / Open Items
-- If you prefer different UUIDs, tell the Android team and we’ll update the app config fields.
-- If you want to include battery reporting, we can add a read characteristic (optional).
+## 5) Notes / Open Items
+- If you prefer a different channel or MAC pairing strategy, coordinate with the sender firmware.
+- Battery reporting can be added later as a separate ESP-NOW message type (optional).

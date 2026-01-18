@@ -10,7 +10,6 @@ import kotlin.math.abs
 
 class HapticsController(
     context: Context,
-    private val wristbandController: WristbandController? = null,
 ) {
     private val vibrator: Vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         val vm = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
@@ -33,15 +32,12 @@ class HapticsController(
     private fun handleEvents(obj: JSONObject) {
         when (obj.optString("type")) {
             "alarm.fire" -> if (obj.optString("state") == "started") {
-                wristbandController?.send(patternId = 10, intensity0to1 = 1.0f, durationMs = 1500)
                 buzz(pattern = longArrayOf(0, 800, 200, 800))
             }
             "alarm.car_horn" -> if (obj.optString("state") == "started") {
-                wristbandController?.send(patternId = 11, intensity0to1 = 0.8f, durationMs = 800)
                 buzz(pattern = longArrayOf(0, 200, 100, 200, 100, 200))
             }
             "alert.keyword" -> {
-                wristbandController?.send(patternId = 20, intensity0to1 = 1.0f, durationMs = 600)
                 buzz(pattern = longArrayOf(0, 120, 80, 120, 80, 120))
             }
             "direction.ui" -> {
@@ -52,10 +48,8 @@ class HapticsController(
                 lastDirectionDeg = direction
                 // Simple directional buzz: one pulse for left, two for right.
                 if (direction < 0) {
-                    wristbandController?.send(patternId = 1, intensity0to1 = intensity, durationMs = 250)
                     buzz(pattern = longArrayOf(0, 120))
                 } else {
-                    wristbandController?.send(patternId = 2, intensity0to1 = intensity, durationMs = 250)
                     buzz(pattern = longArrayOf(0, 80, 80, 80))
                 }
             }
