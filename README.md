@@ -29,12 +29,14 @@ This repo has two Android product flavors:
 - `viture` (uses Viture SDK AAR for IMU/head tracking)
 
 Prereqs:
-- JDK 17 (recommended: `brew install openjdk@17`)
+- JDK 17
 - Android SDK (Platform 34 + Build-Tools + Platform-Tools)
 - For `viture`: `android/app/libs/VITURE-SDK-1.0.7.aar` present (not committed)
 
 Commands:
-- `export JAVA_HOME="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"`
+- Recommended (no system JDK setup): `cd android && ./scripts/gradlew17.sh ...`
+  - Builds with a project-local JDK 17 in `android/.jdk/` (gitignored).
+- If you already have JDK 17 installed: `export JAVA_HOME="$(/usr/libexec/java_home -v 17)"`
 - `export ANDROID_SDK_ROOT="$HOME/Library/Android/sdk"`
 - `cd android`
 - `cat > local.properties <<EOF

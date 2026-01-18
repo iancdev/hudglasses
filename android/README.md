@@ -29,11 +29,16 @@ This project has 2 product flavors:
 
 ## CLI Build (no Android Studio)
 Prereqs:
-- JDK 17 (recommended: `brew install openjdk@17`)
+- JDK 17
 - Android SDK Platform 34 + Build-Tools 34.0.0 + Platform-Tools
 
 Commands:
-- `export JAVA_HOME="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"`
+- Recommended (no system JDK setup):
+  - `cd android`
+  - `./scripts/gradlew17.sh :app:assembleNosdkDebug`
+  - `./scripts/gradlew17.sh :app:assembleVitureDebug` (requires the Viture AAR in `android/app/libs/`)
+- If you already have JDK 17 installed:
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17)"`
 - `export ANDROID_SDK_ROOT="$HOME/Library/Android/sdk"`
 - `cd android`
 - `./gradlew :app:assembleNosdkDebug`

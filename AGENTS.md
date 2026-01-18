@@ -22,8 +22,9 @@ This project has two Android product flavors:
 - `viture` — builds/runs with Viture SDK AAR; IMU/head tracking enabled.
 
 Prereqs:
-- JDK 17 (recommended: `brew install openjdk@17`)
+- JDK 17
   - Note: JDK 25 currently fails the Gradle/Kotlin build with `IllegalArgumentException: 25.0.1`.
+  - If you don’t have a system JDK 17 installed, use `cd android && ./scripts/gradlew17.sh ...` to download a local JDK 17 into `android/.jdk/` (gitignored) and run Gradle with it.
 - Android SDK with:
   - Platform 34
   - Build-Tools 34.x
@@ -31,7 +32,12 @@ Prereqs:
 - For `viture` flavor: `android/app/libs/VITURE-SDK-1.0.7.aar` present (not committed).
 
 Commands:
-- `export JAVA_HOME="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"`
+- Recommended (no system JDK setup):
+  - `cd android`
+  - `./scripts/gradlew17.sh :app:assembleNosdkDebug`
+  - `./scripts/gradlew17.sh :app:assembleVitureDebug`
+- If you already have JDK 17 installed:
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17)"`
 - `export ANDROID_SDK_ROOT="$HOME/Library/Android/sdk"`
 - `cd android`
 - `cat > local.properties <<EOF

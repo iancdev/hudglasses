@@ -10,6 +10,7 @@ __pycache__/
 # android
 android/.gradle/
 android/.idea/
+android/.jdk/
 android/**/build/
 android/local.properties
 android/app/libs/*.aar
