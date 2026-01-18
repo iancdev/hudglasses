@@ -193,8 +193,8 @@ class HudServer:
         # Use these to bias the "front vs back" decision without affecting left/right.
         #   HYBRID_FRONT_GAIN > HYBRID_BACK_GAIN => easier to classify as "front"
         #   HYBRID_BACK_GAIN  > HYBRID_FRONT_GAIN => easier to classify as "back"
-        self._hybrid_front_gain: float = float(os.environ.get("HYBRID_FRONT_GAIN", "1.0"))
-        self._hybrid_back_gain: float = float(os.environ.get("HYBRID_BACK_GAIN", "1.0"))
+        self._hybrid_front_gain: float = float(os.environ.get("HYBRID_FRONT_GAIN", "2.0"))
+        self._hybrid_back_gain: float = float(os.environ.get("HYBRID_BACK_GAIN", "0.005"))
         # Bias the 4-mic (quad) centroid slightly toward the front (phone mics can be much "hotter").
         self._quad_front_weight: float = float(os.environ.get("QUAD_FRONT_WEIGHT", "1.3"))
         self._quad_back_weight: float = float(os.environ.get("QUAD_BACK_WEIGHT", "0.01"))
