@@ -19,7 +19,7 @@ class YamnetParams:
     patch_window_seconds: float = 0.96
     patch_hop_seconds: float = 0.48
     num_classes: int = 521
-    batchnorm_epsilon: float = 1e-3
+    batchnorm_epsilon: float = 1e-4
     batchnorm_momentum: float = 0.99
 
 
@@ -31,8 +31,8 @@ class _WaveformToLogMelPatches(tf_keras.layers.Layer):
         self._stft_window_length_samples = int(round(self._p.sample_rate_hz * self._p.stft_window_seconds))
         self._stft_hop_length_samples = int(round(self._p.sample_rate_hz * self._p.stft_hop_seconds))
 
-        # Official YAMNet uses a 512-point FFT for 16kHz audio.
-        self._fft_length = 512
+        # YAMNet uses the next power-of-2 FFT length of the window size (for 16kHz/25ms this is 512).
+        self._fft_length = 1 << (int(self._stft_window_length_samples) - 1).bit_length()
         self._spectrogram_bins = (self._fft_length // 2) + 1
 
         self._patch_frames = int(round(self._p.patch_window_seconds / self._p.stft_hop_seconds))
@@ -61,17 +61,14 @@ class _WaveformToLogMelPatches(tf_keras.layers.Layer):
         waveform = tf.convert_to_tensor(inputs, dtype=tf.float32)
 
         stft = tf.signal.stft(
-            waveform,
+            signals=waveform,
             frame_length=int(self._stft_window_length_samples),
             frame_step=int(self._stft_hop_length_samples),
             fft_length=int(self._fft_length),
-            window_fn=tf.signal.hann_window,
-            pad_end=True,
         )
         magnitude_spectrogram = tf.abs(stft)
 
-        mel = tf.tensordot(magnitude_spectrogram, tf.cast(self._mel_matrix, magnitude_spectrogram.dtype), axes=1)
-        mel.set_shape(magnitude_spectrogram.shape[:-1].concatenate([int(self._p.mel_bins)]))
+        mel = tf.matmul(magnitude_spectrogram, tf.cast(self._mel_matrix, magnitude_spectrogram.dtype))
 
         log_mel = tf.math.log(mel + tf.cast(self._p.log_offset, mel.dtype))
 
@@ -81,8 +78,6 @@ class _WaveformToLogMelPatches(tf_keras.layers.Layer):
             frame_length=int(self._patch_frames),
             frame_step=int(self._patch_hop_frames),
             axis=1,
-            pad_end=True,
-            pad_value=tf.cast(0.0, log_mel.dtype),
         )
         return patches
 
@@ -114,7 +109,7 @@ def yamnet_model(*, params: YamnetParams | None = None) -> tf_keras.Model:
         )
 
     def _relu6(name: str) -> tf_keras.layers.ReLU:
-        return layers.ReLU(max_value=6.0, name=name)
+        return layers.ReLU(name=name)
 
     x = layers.Conv2D(
         32, (3, 3), strides=(2, 2), padding="same", use_bias=False, name="layer1/conv"
