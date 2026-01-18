@@ -143,13 +143,15 @@ private fun Subtitles(state: HudState) {
         append(state.subtitlePartial)
     }.trim()
 
-    Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+    if (text.isBlank()) return
+
+    Box(modifier = Modifier.fillMaxSize().padding(24.dp)) {
         Text(
             text = text,
             color = Color.White,
             style = MaterialTheme.typography.headlineSmall,
-            textAlign = TextAlign.Start,
-            modifier = Modifier.weight(1f),
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter),
         )
     }
 }
