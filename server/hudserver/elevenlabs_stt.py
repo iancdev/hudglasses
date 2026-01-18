@@ -21,6 +21,7 @@ class ElevenLabsConfig:
     language_code: str | None = None
     audio_format: str = "pcm_16000"
     commit_strategy: str = "vad"
+    vad_silence_threshold_secs: float = 0.3
     include_timestamps: bool = False
 
 
@@ -110,6 +111,8 @@ class ElevenLabsRealtimeStt:
             parts.append(f"audio_format={self._cfg.audio_format}")
         if self._cfg.commit_strategy:
             parts.append(f"commit_strategy={self._cfg.commit_strategy}")
+        if self._cfg.vad_silence_threshold_secs:
+            parts.append(f"vad_silence_threshold_secs={self._cfg.vad_silence_threshold_secs}")
         if self._cfg.include_timestamps:
             parts.append("include_timestamps=true")
         query = ("?" + "&".join(parts)) if parts else ""

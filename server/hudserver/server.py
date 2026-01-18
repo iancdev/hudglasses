@@ -576,6 +576,7 @@ class HudServer:
             model_id=(os.environ.get("ELEVENLABS_MODEL_ID") or None),
             language_code=(os.environ.get("ELEVENLABS_LANGUAGE_CODE") or None),
             commit_strategy=(os.environ.get("ELEVENLABS_COMMIT_STRATEGY") or "vad"),
+            vad_silence_threshold_secs=float(os.environ.get("ELEVENLABS_VAD_SILENCE_THRESHOLD_SECS") or "0.3"),
             include_timestamps=(os.environ.get("ELEVENLABS_INCLUDE_TIMESTAMPS") == "1"),
         )
         stt = ElevenLabsRealtimeStt(cfg)
