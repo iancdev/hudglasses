@@ -147,11 +147,11 @@ class HudServer:
         self._radar_tracks: dict[int, RadarTrack] = {}
         self._radar_next_track_id: int = 1
         self._radar_track_freq_tol_hz: float = float(os.environ.get("RADAR_TRACK_FREQ_TOL_HZ", "250"))
-        self._radar_track_alpha_freq: float = float(os.environ.get("RADAR_TRACK_ALPHA_FREQ", "0.35"))
-        self._radar_track_alpha_intensity: float = float(os.environ.get("RADAR_TRACK_ALPHA_INTENSITY", "0.25"))
-        self._radar_track_alpha_dir: float = float(os.environ.get("RADAR_TRACK_ALPHA_DIR", "0.25"))
+        self._radar_track_alpha_freq: float = float(os.environ.get("RADAR_TRACK_ALPHA_FREQ", "0.25"))
+        self._radar_track_alpha_intensity: float = float(os.environ.get("RADAR_TRACK_ALPHA_INTENSITY", "0.15"))
+        self._radar_track_alpha_dir: float = float(os.environ.get("RADAR_TRACK_ALPHA_DIR", "0.15"))
         self._radar_track_decay_tau_s: float = float(os.environ.get("RADAR_TRACK_DECAY_TAU_S", "1.2"))
-        self._radar_track_min_intensity: float = float(os.environ.get("RADAR_TRACK_MIN_INTENSITY", "0.08"))
+        self._radar_track_min_intensity: float = float(os.environ.get("RADAR_TRACK_MIN_INTENSITY", "0.15"))
 
         radar_samples = int(16000 * self._radar_window_s)
         self._radar_buf_fl = _SampleRing(radar_samples)
