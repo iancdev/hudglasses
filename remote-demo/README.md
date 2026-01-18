@@ -36,6 +36,17 @@ export ADB_SERIAL="192.168.x.y:5555"
 ./remote-demo/bin/stream.sh
 ```
 
+To stream the AR/external display, first list available displays:
+```bash
+./remote-demo/bin/list_displays.sh
+```
+
+Then pick the display id (often `1` for a second display, but it varies):
+```bash
+export DISPLAY_ID=1
+./remote-demo/bin/stream.sh
+```
+
 Tuning knobs:
 ```bash
 export FPS=60

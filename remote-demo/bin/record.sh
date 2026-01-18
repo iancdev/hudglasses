@@ -8,6 +8,7 @@ FPS="${FPS:-60}"
 BITRATE="${BITRATE:-16M}"
 WINDOW_TITLE="${WINDOW_TITLE:-HUDson}"
 RECORD_PATH="${RECORD_PATH:-remote-demo/out/demo.mkv}"
+DISPLAY_ID="${DISPLAY_ID:-0}"
 
 mkdir -p "$(dirname "$RECORD_PATH")"
 
@@ -18,7 +19,7 @@ if ! command -v scrcpy >/dev/null 2>&1; then
 fi
 
 echo "Recording to: $RECORD_PATH"
-args=(--no-audio --max-fps "$FPS" --video-bit-rate "$BITRATE" --window-title "$WINDOW_TITLE" --record "$RECORD_PATH")
+args=(--no-audio --max-fps "$FPS" --video-bit-rate "$BITRATE" --window-title "$WINDOW_TITLE" --display-id "$DISPLAY_ID" --record "$RECORD_PATH")
 if [[ -n "$ADB_SERIAL" ]]; then
   args+=(--serial "$ADB_SERIAL")
 fi
