@@ -504,6 +504,11 @@ private fun RemoteUi(
                 checked = state.hudShowRadar,
                 onCheckedChange = { enabled -> HudStore.update { it.copy(hudShowRadar = enabled) } },
             )
+            Text("Subs")
+            Switch(
+                checked = state.hudShowSubtitles,
+                onCheckedChange = { enabled -> HudStore.update { it.copy(hudShowSubtitles = enabled) } },
+            )
             Text("Debug")
             Switch(
                 checked = state.hudShowDebugText,

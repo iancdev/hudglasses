@@ -104,7 +104,9 @@ private fun HudUi() {
             Radar(state, smoothedDots)
         }
         AlarmAlert(state)
-        Subtitles(state)
+        if (state.hudShowSubtitles) {
+            Subtitles(state)
+        }
         KeywordAlert(state)
         if (state.hudShowGlow) {
             EdgeGlow(state, smoothedDots)
