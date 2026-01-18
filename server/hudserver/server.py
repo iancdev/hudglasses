@@ -131,8 +131,8 @@ class HudServer:
         self._direction_gain_quad: float = float(os.environ.get("DIRECTION_GAIN_QUAD", "4.5"))
         self._direction_gain_lr: float = float(os.environ.get("DIRECTION_GAIN_LR", "6.0"))
         self._direction_gain_mono: float = float(os.environ.get("DIRECTION_GAIN_MONO", "6.0"))
-        self._back_balance_gain_deg: float = float(os.environ.get("BACK_BALANCE_GAIN_DEG", "120.0"))
-        self._back_balance_exp: float = float(os.environ.get("BACK_BALANCE_EXP", "0.5"))
+        self._back_balance_gain_deg: float = float(os.environ.get("BACK_BALANCE_GAIN_DEG", "150.0"))
+        self._back_balance_exp: float = float(os.environ.get("BACK_BALANCE_EXP", "0.8"))
 
         # Frequency-based radar dots (hackathon-friendly multi-source visualization).
         self._radar_window_s: float = float(os.environ.get("RADAR_WINDOW_S", "0.5"))
@@ -160,6 +160,12 @@ class HudServer:
         self._alarm_rms_threshold: float = float(os.environ.get("ALARM_RMS_THRESHOLD", "0.02"))
         self._fire_ratio_threshold: float = float(os.environ.get("FIRE_BAND_RATIO_THRESHOLD", "0.18"))
         self._horn_ratio_threshold: float = float(os.environ.get("HORN_BAND_RATIO_THRESHOLD", "0.20"))
+        self._enable_heuristic_alarms: bool = (os.environ.get("ENABLE_HEURISTIC_ALARMS") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
 
         self._stop = asyncio.Event()
 
@@ -168,7 +174,11 @@ class HudServer:
         stt_task = asyncio.create_task(self._stt_loop(), name="stt_loop")
         status_task = asyncio.create_task(self._status_loop(), name="status_loop")
         direction_task = asyncio.create_task(self._direction_loop(), name="direction_loop")
-        alarms_task = asyncio.create_task(self._alarms_loop(), name="alarms_loop")
+        alarms_task: asyncio.Task[None] | None = None
+        if self._enable_heuristic_alarms:
+            alarms_task = asyncio.create_task(self._alarms_loop(), name="alarms_loop")
+        else:
+            self._logger.info("Heuristic alarms disabled (set ENABLE_HEURISTIC_ALARMS=1 to enable)")
         try:
             async with websockets.serve(self._route, self._host, self._port, max_size=2 * 1024 * 1024):
                 await self._stop.wait()
@@ -176,8 +186,12 @@ class HudServer:
             stt_task.cancel()
             status_task.cancel()
             direction_task.cancel()
-            alarms_task.cancel()
-            await asyncio.gather(stt_task, status_task, direction_task, alarms_task, return_exceptions=True)
+            if alarms_task is not None:
+                alarms_task.cancel()
+            tasks: list[asyncio.Task[None]] = [stt_task, status_task, direction_task]
+            if alarms_task is not None:
+                tasks.append(alarms_task)
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _route(self, conn: ServerConnection) -> None:
         raw_path = conn.request.path
