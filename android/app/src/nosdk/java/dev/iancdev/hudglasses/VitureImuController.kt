@@ -25,6 +25,10 @@ class VitureImuController(
         // Intentionally no-op.
     }
 
+    fun retryInit() {
+        // Intentionally no-op.
+    }
+
     fun setImuEnabled(enabled: Boolean) {
         // Intentionally no-op.
     }

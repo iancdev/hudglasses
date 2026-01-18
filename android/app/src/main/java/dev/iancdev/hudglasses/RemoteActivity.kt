@@ -109,6 +109,10 @@ class RemoteActivity : ComponentActivity() {
                         onSetVitureImu = { enabled -> vitureImuController.setImuEnabled(enabled) },
                         onSetViture3d = { enabled -> vitureImuController.set3dEnabled(enabled) },
                         onSetVitureImuFreq = { mode -> vitureImuController.setImuFrequency(mode) },
+                        onRetryVitureInit = {
+                            HudStore.update { it.copy(vitureInitResult = null, vitureImuState = null, viture3dState = null, vitureImuFrequency = null) }
+                            vitureImuController.retryInit()
+                        },
                         onApplyVitureHudDefaults = {
                             vitureImuController.set3dEnabled(false)
                             vitureImuController.setImuEnabled(true)
@@ -247,6 +251,7 @@ private fun RemoteUi(
     onSetVitureImu: (Boolean) -> Unit,
     onSetViture3d: (Boolean) -> Unit,
     onSetVitureImuFreq: (Int) -> Unit,
+    onRetryVitureInit: () -> Unit,
     onApplyVitureHudDefaults: () -> Unit,
     onApplyThresholds: (Float, Float, Float) -> Unit,
     onApplyKeywords: (String, Float) -> Unit,
@@ -291,6 +296,7 @@ private fun RemoteUi(
                 onCheckedChange = onSetViture3d,
             )
             Button(onClick = onApplyVitureHudDefaults) { Text("HUD Defaults") }
+            Button(onClick = onRetryVitureInit) { Text("Retry Init") }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("IMU Hz")

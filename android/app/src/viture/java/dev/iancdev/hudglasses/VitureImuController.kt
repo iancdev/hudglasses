@@ -101,6 +101,17 @@ class VitureImuController(
         runCatching { arManager?.release() }
     }
 
+    fun retryInit() {
+        stop()
+        release()
+        arManager = null
+        started = false
+        initialized = false
+        defaultsApplied = false
+        lastPoseSentMs = 0
+        start()
+    }
+
     fun setImuEnabled(enabled: Boolean) {
         if (!initialized) return
         val rc = arManager?.setImuOn(enabled) ?: return
