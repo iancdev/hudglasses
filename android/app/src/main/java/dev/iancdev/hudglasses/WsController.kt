@@ -245,6 +245,11 @@ class WsController(
         val hasLeft = esp32?.has("left") == true
         val hasRight = esp32?.has("right") == true
 
+        val extHaptics = obj.optJSONObject("externalHaptics")
+        val extEnabled = extHaptics?.optBoolean("enabled", false) == true
+        val extLeftConnected = extHaptics?.optBoolean("leftConnected", false) == true
+        val extRightConnected = extHaptics?.optBoolean("rightConnected", false) == true
+
         val alarms = obj.optJSONObject("alarms")
         val fireActive = alarms?.optBoolean("fireActive", false) == true
         val hornActive = alarms?.optBoolean("carHornActive", false) == true
@@ -254,6 +259,9 @@ class WsController(
                 serverStatus = obj.optString("server", it.serverStatus),
                 esp32ConnectedLeft = hasLeft,
                 esp32ConnectedRight = hasRight,
+                externalHapticsEnabled = extEnabled,
+                externalHapticsLeftConnected = extLeftConnected,
+                externalHapticsRightConnected = extRightConnected,
                 fireAlarm = if (fireActive || sirenActive) "active" else "idle",
                 carHorn = if (hornActive) "active" else "idle",
                 siren = if (sirenActive) "active" else "idle",

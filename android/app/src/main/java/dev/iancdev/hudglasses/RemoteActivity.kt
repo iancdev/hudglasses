@@ -459,6 +459,11 @@ private fun RemoteUi(
         Text("ESP32 L: ${if (state.esp32ConnectedLeft) "connected" else "missing"}")
         Text("ESP32 R: ${if (state.esp32ConnectedRight) "connected" else "missing"}")
         Text("Wristband (ESP-NOW bridge): ${if (state.wristbandConnected) "connected" else "disconnected"}")
+        Text(
+            "External haptics: ${if (state.externalHapticsEnabled) "enabled" else "disabled"} " +
+                "(L=${if (state.externalHapticsLeftConnected) "connected" else "disconnected"} " +
+                "R=${if (state.externalHapticsRightConnected) "connected" else "disconnected"})"
+        )
         Text("Phone haptics: ${if (state.phoneHapticsEnabled) "on" else "off"} (direction=${if (state.phoneDirectionHapticsEnabled) "on" else "off"})")
         if (state.serverStatus.isNotBlank()) {
             Text("Server: ${state.serverStatus}")
