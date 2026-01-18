@@ -593,10 +593,23 @@ class HudServer:
                     self._fire_ratio_threshold = float(obj.get("fireRatioThreshold", self._fire_ratio_threshold))
                     self._horn_ratio_threshold = float(obj.get("hornRatioThreshold", self._horn_ratio_threshold))
                     self._keyword_cooldown_s = float(obj.get("keywordCooldownS", self._keyword_cooldown_s))
+                    prev_invert_head_yaw = bool(self._invert_head_yaw)
+                    prev_invert_phone_yaw = bool(self._invert_phone_yaw)
                     if obj.get("invertHeadYaw") is not None:
                         self._invert_head_yaw = _parse_bool(str(obj.get("invertHeadYaw")), default=False)
                     if obj.get("invertPhoneYaw") is not None:
                         self._invert_phone_yaw = _parse_bool(str(obj.get("invertPhoneYaw")), default=False)
+                    # Keep pose/zero state consistent when toggles flip so changes apply immediately.
+                    if bool(self._invert_head_yaw) != prev_invert_head_yaw:
+                        if self._head_pose is not None:
+                            self._head_pose.yaw_deg = -float(self._head_pose.yaw_deg)
+                        if self._cal_head_yaw0 is not None:
+                            self._cal_head_yaw0 = -float(self._cal_head_yaw0)
+                    if bool(self._invert_phone_yaw) != prev_invert_phone_yaw:
+                        if self._torso_pose is not None:
+                            self._torso_pose.yaw_deg = -float(self._torso_pose.yaw_deg)
+                        if self._cal_torso_yaw0 is not None:
+                            self._cal_torso_yaw0 = -float(self._cal_torso_yaw0)
                     if obj.get("esp32GainLeft") is not None:
                         self._esp32_gain_left = float(obj.get("esp32GainLeft"))
                     if obj.get("esp32GainRight") is not None:
