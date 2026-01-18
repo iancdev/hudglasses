@@ -21,3 +21,6 @@ VitureSDK/VITURESensorDemo/
 VitureSDK/*.pdf
 VitureSDK/*.tar.*
 .env
+
+
+triangulation_with_2_mics_demo/
