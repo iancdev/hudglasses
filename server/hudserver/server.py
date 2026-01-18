@@ -182,6 +182,13 @@ class HudServer:
         self._direction_gain_mono: float = float(os.environ.get("DIRECTION_GAIN_MONO", "6.0"))
         self._back_balance_gain_deg: float = float(os.environ.get("BACK_BALANCE_GAIN_DEG", "150.0"))
         self._back_balance_exp: float = float(os.environ.get("BACK_BALANCE_EXP", "0.8"))
+        # Hybrid direction tuning (when both front ESP32 + phone stereo are present):
+        # - phone stereo decides left/right
+        # - front-vs-back intensity decides front/back
+        # Gain scales the front/back axis vs the left/right axis:
+        #   <1.0 => weaker front/back pull (more sideways)
+        #   >1.0 => stronger front/back pull (more front/back)
+        self._hybrid_front_back_gain: float = float(os.environ.get("HYBRID_FRONT_BACK_GAIN", "1.0"))
         # Bias the 4-mic (quad) centroid slightly toward the front (phone mics can be much "hotter").
         self._quad_front_weight: float = float(os.environ.get("QUAD_FRONT_WEIGHT", "1.3"))
         self._quad_back_weight: float = float(os.environ.get("QUAD_BACK_WEIGHT", "0.01"))
@@ -307,16 +314,10 @@ class HudServer:
         self._stop = asyncio.Event()
 
     def _external_haptics_side(self, now: float) -> str:
-        # Choose left vs right using the freshest per-side loudness (fallback to direction sign).
+        # Choose left vs right using the phone's stereo mic (fallback to direction sign).
+        # Rationale: the phone is worn on the back and provides the most reliable L/R reference.
         left_level = 0.0
         right_level = 0.0
-
-        fl = self._esp32_by_role.get("left")
-        fr = self._esp32_by_role.get("right")
-        if fl is not None and (now - fl.last_seen_monotonic) < 1.0:
-            left_level += float(max(0.0, fl.last_rms))
-        if fr is not None and (now - fr.last_seen_monotonic) < 1.0:
-            right_level += float(max(0.0, fr.last_rms))
 
         mic = None
         if self._android_mic_by_conn:
@@ -1083,6 +1084,7 @@ class HudServer:
                 "yamnetTop": [{"label": n, "score": float(s)} for (n, s) in self._yamnet_last_top[:10]],
             },
             "directionConfig": {
+                "hybridFrontBackGain": self._hybrid_front_back_gain,
                 "quadFrontWeight": self._quad_front_weight,
                 "quadBackWeight": self._quad_back_weight,
                 "esp32GainLeft": self._esp32_gain_left,
@@ -1256,18 +1258,18 @@ class HudServer:
             radar_dots = self._emit_radar_tracks(now, delta_yaw)
 
             if has_front and has_back:
-                # 4-mic spatial estimate using the trapezoid geometry and energy-weighted centroid.
-                # (Still ILD/energy-based; no TDOA.)
-                pos = self._mic_positions_xy
-                front_w = max(0.0, float(self._quad_front_weight))
-                back_w = max(0.0, float(self._quad_back_weight))
-                e_fl = (float(fl) * float(fl)) * front_w
-                e_fr = (float(fr) * float(fr)) * front_w
-                e_bl = (float(bl) * float(bl)) * back_w
-                e_br = (float(br) * float(br)) * back_w
-                x = (e_fr * pos["fr"][0]) + (e_fl * pos["fl"][0]) + (e_br * pos["br"][0]) + (e_bl * pos["bl"][0])
-                y = (e_fr * pos["fr"][1]) + (e_fl * pos["fl"][1]) + (e_br * pos["br"][1]) + (e_bl * pos["bl"][1])
-                raw_direction_deg = float(np.degrees(np.arctan2(x, y)))
+                # Hybrid direction:
+                # - left/right is decided purely by the phone's stereo mic (back L/R)
+                # - front/back is decided purely by front-vs-back intensity (sum of front vs sum of back)
+                eps = 1e-6
+                back_total = float(bl + br)
+                front_total = float(fl + fr)
+                x_balance = float((br - bl) / (back_total + eps))  # -1..+1 (phone decides L/R)
+                y_balance = float((front_total - back_total) / (front_total + back_total + eps))  # -1..+1 (front/back)
+                x_balance = float(np.clip(x_balance, -1.0, 1.0))
+                y_balance = float(y_balance * float(self._hybrid_front_back_gain))
+                y_balance = float(np.clip(y_balance, -1.0, 1.0))
+                raw_direction_deg = float(np.degrees(np.arctan2(x_balance, y_balance)))
                 total = fl + fr + bl + br
                 total = max(0.0, float(total) - self._direction_noise_floor)
                 intensity = float(np.clip(total * self._direction_gain_quad, 0.0, 1.0))
@@ -1489,22 +1491,16 @@ class HudServer:
             e_br *= scale
 
             if has_front and has_back:
-                front_w = max(0.0, float(self._quad_front_weight))
-                back_w = max(0.0, float(self._quad_back_weight))
-                pos = self._mic_positions_xy
-                x = (
-                    ((e_fr * front_w) * pos["fr"][0])
-                    + ((e_fl * front_w) * pos["fl"][0])
-                    + ((e_br * back_w) * pos["br"][0])
-                    + ((e_bl * back_w) * pos["bl"][0])
-                )
-                y = (
-                    ((e_fr * front_w) * pos["fr"][1])
-                    + ((e_fl * front_w) * pos["fl"][1])
-                    + ((e_br * back_w) * pos["br"][1])
-                    + ((e_bl * back_w) * pos["bl"][1])
-                )
-                raw_dir = float(np.degrees(np.arctan2(x, y)))
+                # Match the same hybrid direction behavior as the main direction loop.
+                eps = 1e-9
+                back_total = float(e_bl + e_br)
+                front_total = float(e_fl + e_fr)
+                x_balance = float((e_br - e_bl) / (back_total + eps))
+                y_balance = float((front_total - back_total) / (front_total + back_total + eps))
+                x_balance = float(np.clip(x_balance, -1.0, 1.0))
+                y_balance = float(y_balance * float(self._hybrid_front_back_gain))
+                y_balance = float(np.clip(y_balance, -1.0, 1.0))
+                raw_dir = float(np.degrees(np.arctan2(x_balance, y_balance)))
             elif has_front:
                 t = (e_fl + e_fr) + 1e-9
                 balance = (e_fr - e_fl) / t
