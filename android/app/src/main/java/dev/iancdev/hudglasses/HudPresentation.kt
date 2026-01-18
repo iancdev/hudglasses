@@ -335,7 +335,7 @@ private fun EdgeGlow(state: HudState, dots: List<RadarDot>) {
             val fadePx = band * 0.98f
             // Larger radius => wider glow spread along the edge. The fadeStop below keeps the
             // glow confined to the edge band so it doesn't "reach inward" more than before.
-            val radius = (band * (7.0f + 14.0f * i)).coerceAtLeast(band * 5.0f)
+            val radius = (band * (10.5f + 24.0f * i)).coerceAtLeast(band * 8.0f)
             val fadeStop = (fadePx / radius).coerceIn(0.05f, 0.98f)
             val brush =
                 Brush.radialGradient(
@@ -416,7 +416,7 @@ private fun EdgeGlow(state: HudState, dots: List<RadarDot>) {
             val alpha = 0.82f
             val c = alarmGlow.copy(alpha = alpha)
             val band = t
-            val radius = t * 19.0f
+            val radius = t * 26.0f
             val fadePx = band * 0.98f
             val fadeStop = (fadePx / radius).coerceIn(0.05f, 0.98f)
             val brush =
