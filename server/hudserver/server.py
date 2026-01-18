@@ -149,6 +149,12 @@ class HudServer:
         self._direction_gain_mono: float = float(os.environ.get("DIRECTION_GAIN_MONO", "6.0"))
         self._back_balance_gain_deg: float = float(os.environ.get("BACK_BALANCE_GAIN_DEG", "150.0"))
         self._back_balance_exp: float = float(os.environ.get("BACK_BALANCE_EXP", "0.8"))
+        # Bias the 4-mic (quad) centroid slightly toward the front (phone mics can be much "hotter").
+        self._quad_front_weight: float = float(os.environ.get("QUAD_FRONT_WEIGHT", "1.0"))
+        self._quad_back_weight: float = float(os.environ.get("QUAD_BACK_WEIGHT", "0.3"))
+        # Per-mic gain trims (use to compensate mismatched sensitivity, e.g. hot right mic).
+        self._esp32_gain_left: float = float(os.environ.get("ESP32_GAIN_LEFT", "1.0"))
+        self._esp32_gain_right: float = float(os.environ.get("ESP32_GAIN_RIGHT", "0.2"))
 
         # Approximate mic geometry (mm) for 4-corner neckband layout:
         # - back edge is the phone (rear), front edge is the ESP32s (forward).
@@ -401,6 +407,12 @@ class HudServer:
                     self._fire_ratio_threshold = float(obj.get("fireRatioThreshold", self._fire_ratio_threshold))
                     self._horn_ratio_threshold = float(obj.get("hornRatioThreshold", self._horn_ratio_threshold))
                     self._keyword_cooldown_s = float(obj.get("keywordCooldownS", self._keyword_cooldown_s))
+                    if obj.get("esp32GainLeft") is not None:
+                        self._esp32_gain_left = float(obj.get("esp32GainLeft"))
+                    if obj.get("esp32GainRight") is not None:
+                        self._esp32_gain_right = float(obj.get("esp32GainRight"))
+                    self._esp32_gain_left = max(0.0, float(self._esp32_gain_left))
+                    self._esp32_gain_right = max(0.0, float(self._esp32_gain_right))
                     kws = obj.get("keywords")
                     if isinstance(kws, list):
                         cleaned: list[str] = []
@@ -726,7 +738,14 @@ class HudServer:
                 try:
                     pcm = np.frombuffer(msg, dtype=np.int16)
                     if pcm.size:
-                        float_pcm = pcm.astype(np.float32) / np.float32(32768.0)
+                        gain = 1.0
+                        if state.role == "left":
+                            gain = float(self._esp32_gain_left)
+                        elif state.role == "right":
+                            gain = float(self._esp32_gain_right)
+                        gain = max(0.0, gain)
+                        float_pcm = (pcm.astype(np.float32) / np.float32(32768.0)) * np.float32(gain)
+                        float_pcm = np.clip(float_pcm, -1.0, 1.0).astype(np.float32, copy=False)
                         state.last_rms = float(np.sqrt(np.mean(float_pcm * float_pcm)))
                         if state.role == "left":
                             self._radar_buf_fl.append(float_pcm)
@@ -862,6 +881,12 @@ class HudServer:
             "esp32": esp32,
             "androidMic": android_mic,
             "sttAudioSource": self._stt_audio_source,
+            "directionConfig": {
+                "quadFrontWeight": self._quad_front_weight,
+                "quadBackWeight": self._quad_back_weight,
+                "esp32GainLeft": self._esp32_gain_left,
+                "esp32GainRight": self._esp32_gain_right,
+            },
             "headPose": head_pose,
             "torsoPose": torso_pose,
             "poseZero": {"head0YawDeg": self._cal_head_yaw0, "torso0YawDeg": self._cal_torso_yaw0},
@@ -1033,10 +1058,12 @@ class HudServer:
                 # 4-mic spatial estimate using the trapezoid geometry and energy-weighted centroid.
                 # (Still ILD/energy-based; no TDOA.)
                 pos = self._mic_positions_xy
-                e_fl = float(fl) * float(fl)
-                e_fr = float(fr) * float(fr)
-                e_bl = float(bl) * float(bl)
-                e_br = float(br) * float(br)
+                front_w = max(0.0, float(self._quad_front_weight))
+                back_w = max(0.0, float(self._quad_back_weight))
+                e_fl = (float(fl) * float(fl)) * front_w
+                e_fr = (float(fr) * float(fr)) * front_w
+                e_bl = (float(bl) * float(bl)) * back_w
+                e_br = (float(br) * float(br)) * back_w
                 x = (e_fr * pos["fr"][0]) + (e_fl * pos["fl"][0]) + (e_br * pos["br"][0]) + (e_bl * pos["bl"][0])
                 y = (e_fr * pos["fr"][1]) + (e_fl * pos["fl"][1]) + (e_br * pos["br"][1]) + (e_bl * pos["bl"][1])
                 raw_direction_deg = float(np.degrees(np.arctan2(x, y)))
@@ -1261,9 +1288,21 @@ class HudServer:
             e_br *= scale
 
             if has_front and has_back:
+                front_w = max(0.0, float(self._quad_front_weight))
+                back_w = max(0.0, float(self._quad_back_weight))
                 pos = self._mic_positions_xy
-                x = (e_fr * pos["fr"][0]) + (e_fl * pos["fl"][0]) + (e_br * pos["br"][0]) + (e_bl * pos["bl"][0])
-                y = (e_fr * pos["fr"][1]) + (e_fl * pos["fl"][1]) + (e_br * pos["br"][1]) + (e_bl * pos["bl"][1])
+                x = (
+                    ((e_fr * front_w) * pos["fr"][0])
+                    + ((e_fl * front_w) * pos["fl"][0])
+                    + ((e_br * back_w) * pos["br"][0])
+                    + ((e_bl * back_w) * pos["bl"][0])
+                )
+                y = (
+                    ((e_fr * front_w) * pos["fr"][1])
+                    + ((e_fl * front_w) * pos["fl"][1])
+                    + ((e_br * back_w) * pos["br"][1])
+                    + ((e_bl * back_w) * pos["bl"][1])
+                )
                 raw_dir = float(np.degrees(np.arctan2(x, y)))
             elif has_front:
                 t = (e_fl + e_fr) + 1e-9
