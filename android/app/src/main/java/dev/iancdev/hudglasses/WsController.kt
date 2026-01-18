@@ -6,6 +6,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString.Companion.toByteString
 import org.json.JSONObject
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
@@ -57,6 +58,14 @@ class WsController(
 
     fun sendOnEventsChannel(json: JSONObject) {
         eventsSocket?.send(json.toString())
+    }
+
+    fun sendOnSttChannel(json: JSONObject) {
+        sttSocket?.send(json.toString())
+    }
+
+    fun sendSttAudioFrame(frame: ByteArray) {
+        sttSocket?.send(frame.toByteString())
     }
 
     private fun openSockets() {

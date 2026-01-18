@@ -48,6 +48,17 @@ class AndroidClientInfo:
     last_seen_monotonic: float
 
 
+@dataclass(slots=True)
+class AndroidMicState:
+    device_id: str
+    sample_rate_hz: int
+    frame_ms: int
+    bytes_per_frame: int
+    stt_q: asyncio.Queue[bytes]
+    last_seen_monotonic: float
+    dropped_frames: int
+
+
 class HudServer:
     def __init__(self, host: str, port: int, log_level: str = "INFO") -> None:
         setup_logging(log_level)
@@ -59,6 +70,13 @@ class HudServer:
         self._android_events: set[ServerConnection] = set()
         self._android_stt: set[ServerConnection] = set()
         self._android_info: dict[ServerConnection, AndroidClientInfo] = {}
+        self._android_mic_by_conn: dict[ServerConnection, AndroidMicState] = {}
+
+        # STT audio input selection:
+        # - "auto": prefer Android mic if present, else ESP32
+        # - "android_mic": only Android mic
+        # - "esp32": only ESP32
+        self._stt_audio_source: str = (os.environ.get("STT_AUDIO_SOURCE") or "auto").strip().lower()
 
         self._esp32_by_role: dict[str, Esp32AudioState] = {}
         self._head_pose: HeadPoseState | None = None
@@ -176,6 +194,10 @@ class HudServer:
                             if kk:
                                 cleaned.append(kk)
                         self._keywords = cleaned[:50]
+                elif msg_type == "audio.source":
+                    source = str(obj.get("source") or "").strip().lower()
+                    if source in ("auto", "android", "android_mic", "esp32"):
+                        self._stt_audio_source = "android_mic" if source == "android" else source
         finally:
             self._android_events.discard(conn)
             self._android_info.pop(conn, None)
@@ -186,11 +208,84 @@ class HudServer:
         self._logger.info("Android /stt connected from %s", conn.remote_address)
         try:
             await conn.send(dumps({"type": "status", "stt": "connected"}))
-            async for _msg in conn:
-                # Server -> Android only for now.
-                pass
+            async for msg in conn:
+                if isinstance(msg, str):
+                    obj = None
+                    try:
+                        obj = loads(msg)
+                    except Exception:
+                        continue
+                    msg_type = obj.get("type")
+                    if msg_type not in ("audio.hello", "hello"):
+                        continue
+                    audio = obj.get("audio") or {}
+                    audio_format = str(audio.get("format") or "pcm_s16le")
+                    sample_rate_hz = int(audio.get("sampleRateHz") or 16000)
+                    frame_ms = int(audio.get("frameMs") or 20)
+                    device_id = str(obj.get("deviceId") or "android")
+                    if audio_format != "pcm_s16le":
+                        self._logger.warning("Android mic deviceId=%s audio.format=%s (expected pcm_s16le)", device_id, audio_format)
+                        continue
+                    if sample_rate_hz != 16000:
+                        self._logger.warning("Android mic deviceId=%s sampleRateHz=%s (expected 16000)", device_id, sample_rate_hz)
+                        continue
+                    samples_per_frame = int(sample_rate_hz * (frame_ms / 1000.0))
+                    bytes_per_frame = samples_per_frame * 2
+                    self._android_mic_by_conn[conn] = AndroidMicState(
+                        device_id=device_id,
+                        sample_rate_hz=sample_rate_hz,
+                        frame_ms=frame_ms,
+                        bytes_per_frame=bytes_per_frame,
+                        stt_q=asyncio.Queue(maxsize=200),
+                        last_seen_monotonic=asyncio.get_running_loop().time(),
+                        dropped_frames=0,
+                    )
+                    self._logger.info("Android mic ready deviceId=%s sampleRateHz=%s frameMs=%s", device_id, sample_rate_hz, frame_ms)
+                    continue
+
+                if not isinstance(msg, (bytes, bytearray)):
+                    continue
+
+                state = self._android_mic_by_conn.get(conn)
+                if state is None:
+                    # Best-effort default: 16kHz mono PCM, 20ms frames.
+                    sample_rate_hz = 16000
+                    frame_ms = 20
+                    bytes_per_frame = int(sample_rate_hz * (frame_ms / 1000.0)) * 2
+                    state = AndroidMicState(
+                        device_id="android",
+                        sample_rate_hz=sample_rate_hz,
+                        frame_ms=frame_ms,
+                        bytes_per_frame=bytes_per_frame,
+                        stt_q=asyncio.Queue(maxsize=200),
+                        last_seen_monotonic=asyncio.get_running_loop().time(),
+                        dropped_frames=0,
+                    )
+                    self._android_mic_by_conn[conn] = state
+
+                state.last_seen_monotonic = asyncio.get_running_loop().time()
+
+                if len(msg) != state.bytes_per_frame:
+                    self._logger.debug(
+                        "Android mic %s unexpected frame size=%d expected=%d",
+                        state.device_id,
+                        len(msg),
+                        state.bytes_per_frame,
+                    )
+
+                if state.stt_q.full():
+                    try:
+                        _ = state.stt_q.get_nowait()
+                        state.dropped_frames += 1
+                    except asyncio.QueueEmpty:
+                        pass
+                try:
+                    state.stt_q.put_nowait(bytes(msg))
+                except asyncio.QueueFull:
+                    state.dropped_frames += 1
         finally:
             self._android_stt.discard(conn)
+            self._android_mic_by_conn.pop(conn, None)
             self._logger.info("Android /stt disconnected from %s", conn.remote_address)
 
     async def _handle_esp32_audio(self, conn: ServerConnection, query: dict[str, list[str]]) -> None:
@@ -341,6 +436,18 @@ class HudServer:
                 }
                 for role, s in self._esp32_by_role.items()
             }
+            android_mic = None
+            if self._android_mic_by_conn:
+                # Report only the freshest mic sender (hackathon assumption: 1 phone).
+                freshest = max(self._android_mic_by_conn.values(), key=lambda s: s.last_seen_monotonic)
+                android_mic = {
+                    "deviceId": freshest.device_id,
+                    "sampleRateHz": freshest.sample_rate_hz,
+                    "frameMs": freshest.frame_ms,
+                    "droppedFrames": freshest.dropped_frames,
+                    "sttQueue": freshest.stt_q.qsize(),
+                    "ageS": float(max(0.0, now - freshest.last_seen_monotonic)),
+                }
             head_pose = None
             if self._head_pose is not None:
                 head_pose = {
@@ -366,6 +473,8 @@ class HudServer:
                     "server": "ok",
                     "android": {"eventsClients": len(self._android_events), "sttClients": len(self._android_stt), "clients": android_clients},
                     "esp32": esp32,
+                    "androidMic": android_mic,
+                    "sttAudioSource": self._stt_audio_source,
                     "headPose": head_pose,
                 }
             )
@@ -392,6 +501,25 @@ class HudServer:
         async def audio_frames() -> Any:
             active_role = "left"
             while True:
+                source = self._stt_audio_source
+                if source in ("auto", "android_mic"):
+                    if self._android_mic_by_conn:
+                        mic = max(self._android_mic_by_conn.values(), key=lambda s: s.last_seen_monotonic)
+                        try:
+                            frame = await asyncio.wait_for(mic.stt_q.get(), timeout=0.25)
+                        except asyncio.CancelledError:
+                            raise
+                        except asyncio.TimeoutError:
+                            # If user explicitly selected Android mic, don't fall back automatically.
+                            if source == "android_mic":
+                                continue
+                        else:
+                            yield frame
+                            continue
+                    elif source == "android_mic":
+                        await asyncio.sleep(0.05)
+                        continue
+
                 left = self._esp32_by_role.get("left")
                 right = self._esp32_by_role.get("right")
                 if left and right:

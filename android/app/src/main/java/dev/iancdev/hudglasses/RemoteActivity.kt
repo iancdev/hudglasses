@@ -1,10 +1,14 @@
 package dev.iancdev.hudglasses
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.hardware.display.DisplayManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -35,6 +40,21 @@ class RemoteActivity : ComponentActivity() {
     private lateinit var wsController: WsController
     private lateinit var vitureImuController: VitureImuController
     private lateinit var hapticsController: HapticsController
+    private lateinit var micSttStreamer: MicSttStreamer
+
+    private var micSttRequested: Boolean = false
+
+    private val micPermLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!micSttRequested) return@registerForActivityResult
+        micSttRequested = false
+        if (granted) {
+            enableMicSttInternal()
+        } else {
+            HudStore.update { it.copy(micSttEnabled = false) }
+        }
+    }
 
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) = runOnUiThread { refreshHudDisplay() }
@@ -53,6 +73,9 @@ class RemoteActivity : ComponentActivity() {
         hapticsController = HapticsController(this)
         wsController = WsController(
             onEvents = { evt -> hapticsController.onEvent(evt) },
+        )
+        micSttStreamer = MicSttStreamer(
+            onAudioFrame = { frame -> wsController.sendSttAudioFrame(frame) },
         )
         vitureImuController = VitureImuController(
             context = this,
@@ -79,6 +102,7 @@ class RemoteActivity : ComponentActivity() {
                     RemoteUi(
                         onConnect = { wsController.connect(HudStore.state.value.serverUrl) },
                         onDisconnect = { wsController.disconnect() },
+                        onSetMicSttEnabled = { enabled -> setMicSttEnabled(enabled) },
                         onSetVitureImu = { enabled -> vitureImuController.setImuEnabled(enabled) },
                         onSetViture3d = { enabled -> vitureImuController.set3dEnabled(enabled) },
                         onSetVitureImuFreq = { mode -> vitureImuController.setImuFrequency(mode) },
@@ -133,6 +157,7 @@ class RemoteActivity : ComponentActivity() {
         vitureImuController.stop()
         vitureImuController.release()
         wsController.close()
+        micSttStreamer.close()
         hudPresentation?.dismiss()
         hudPresentation = null
     }
@@ -152,12 +177,63 @@ class RemoteActivity : ComponentActivity() {
         hudPresentation?.dismiss()
         hudPresentation = HudPresentation(this, external, owner = this).also { it.show() }
     }
+
+    private fun setMicSttEnabled(enabled: Boolean) {
+        if (enabled) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                enableMicSttInternal()
+                return
+            }
+            micSttRequested = true
+            micPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+
+        micSttRequested = false
+        micSttStreamer.stop()
+        HudStore.update { it.copy(micSttEnabled = false) }
+        wsController.sendOnEventsChannel(
+            JSONObject()
+                .put("type", "audio.source")
+                .put("source", "auto")
+        )
+    }
+
+    private fun enableMicSttInternal() {
+        val sampleRateHz = 16000
+        val frameMs = 20
+        HudStore.update { it.copy(micSttEnabled = true) }
+
+        wsController.sendOnEventsChannel(
+            JSONObject()
+                .put("type", "audio.source")
+                .put("source", "android_mic")
+        )
+
+        wsController.sendOnSttChannel(
+            JSONObject()
+                .put("type", "audio.hello")
+                .put("v", 1)
+                .put("deviceId", Build.MODEL)
+                .put(
+                    "audio",
+                    JSONObject()
+                        .put("format", "pcm_s16le")
+                        .put("sampleRateHz", sampleRateHz)
+                        .put("channels", 1)
+                        .put("frameMs", frameMs),
+                )
+        )
+
+        micSttStreamer.start(sampleRateHz = sampleRateHz, frameMs = frameMs)
+    }
 }
 
 @Composable
 private fun RemoteUi(
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
+    onSetMicSttEnabled: (Boolean) -> Unit,
     onSetVitureImu: (Boolean) -> Unit,
     onSetViture3d: (Boolean) -> Unit,
     onSetVitureImuFreq: (Int) -> Unit,
@@ -178,6 +254,14 @@ private fun RemoteUi(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("HUD Glasses Remote", style = MaterialTheme.typography.headlineSmall)
+
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Phone mic STT")
+            Switch(
+                checked = state.micSttEnabled,
+                onCheckedChange = onSetMicSttEnabled,
+            )
+        }
 
         Text(
             "Viture: init=${vitureInitLabel(state.vitureInitResult)} " +

@@ -72,7 +72,8 @@ Android multi-display plan (standard Android; separate from the Viture SDK):
   - optionally fall back to a HUD preview on the phone for debugging.
 
 ### 2.2 Speech-to-Text (STT)
-- **ESP32 audio is the default STT input** (server selects/mixes left/right as needed).
+- **Android mic is the default STT input** (Phase 1), so the demo works even before ESP32 firmware is ready.
+- Keep the ability to switch later to ESP32 STT input (optional) without changing the Android UI.
 - Laptop server connects to **ElevenLabs realtime STT** (WebSocket) and streams audio chunks from the ESP32 audio stream.
 - Subtitles should update as fast as possible:
   - Forward ElevenLabs `partial_transcript` updates immediately.
@@ -136,6 +137,13 @@ Purpose: keep subtitle latency as low as possible and avoid contention with even
   - `status`: connection/session status (e.g., `stt=connected`, `stt=session_started`)
   - `error`: STT errors (auth/quota/rate-limit/etc.)
 
+**Android → Server (optional, for phone-mic STT input)**
+- `audio.hello` (JSON) then binary audio frames:
+  - audio format: `pcm_s16le`
+  - sample rate: `16000 Hz`
+  - channels: `1`
+  - frame size: `~20ms` recommended (but not strictly required)
+
 ### 5.2 `/events` (All other events)
 Server → Android:
 - `direction.ui` (server-derived UI placement: radar coordinates + edge glow)
@@ -147,7 +155,7 @@ Android → Server:
 - `hello` (client info)
 - `config.update` (thresholds, toggles, keyword list)
 - `head_pose` (optional but recommended: head yaw so the server can make UI placement head-relative)
-- `audio.source` (future: select ESP32 vs Android mic; Phase 1 defaults to ESP32)
+- `audio.source` (select STT input: `auto|android_mic|esp32`)
 
 ## 6) ElevenLabs STT Integration (Server-Side)
 Docs referenced:
