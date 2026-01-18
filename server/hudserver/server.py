@@ -309,6 +309,9 @@ class HudServer:
                     source = str(obj.get("source") or "").strip().lower()
                     if source in ("auto", "android", "android_mic", "esp32"):
                         self._stt_audio_source = "android_mic" if source == "android" else source
+                elif msg_type == "status.request":
+                    now = asyncio.get_running_loop().time()
+                    await conn.send(dumps(self._build_status_payload(now)))
         finally:
             self._android_events.discard(conn)
             self._android_info.pop(conn, None)
@@ -685,74 +688,76 @@ class HudServer:
         for c in dead:
             conns.discard(c)
 
+    def _build_status_payload(self, now: float) -> dict[str, Any]:
+        esp32 = {
+            role: {
+                "deviceId": s.device_id,
+                "role": s.role,
+                "sampleRateHz": s.sample_rate_hz,
+                "channels": s.channels,
+                "frameMs": s.frame_ms,
+                "bytesPerFrame": s.bytes_per_frame,
+                "lastRms": s.last_rms,
+                "droppedFrames": s.dropped_frames,
+                "framesReceived": s.frames_received,
+                "badFrameSizes": s.bad_frame_sizes,
+                "sttQueue": s.stt_q.qsize(),
+                "analysisQueue": s.analysis_q.qsize(),
+            }
+            for role, s in self._esp32_by_role.items()
+        }
+        android_mic = None
+        if self._android_mic_by_conn:
+            # Report only the freshest mic sender (hackathon assumption: 1 phone).
+            freshest = max(self._android_mic_by_conn.values(), key=lambda s: s.last_seen_monotonic)
+            android_mic = {
+                "deviceId": freshest.device_id,
+                "sampleRateHz": freshest.sample_rate_hz,
+                "channels": freshest.channels,
+                "frameMs": freshest.frame_ms,
+                "lastRms": freshest.last_rms,
+                "lastRmsLeft": freshest.last_rms_left,
+                "lastRmsRight": freshest.last_rms_right,
+                "droppedFrames": freshest.dropped_frames,
+                "sttQueue": freshest.stt_q.qsize(),
+                "analysisQueue": freshest.analysis_q.qsize(),
+                "ageS": float(max(0.0, now - freshest.last_seen_monotonic)),
+            }
+        head_pose = None
+        if self._head_pose is not None:
+            head_pose = {
+                "yawDeg": self._head_pose.yaw_deg,
+                "pitchDeg": self._head_pose.pitch_deg,
+                "rollDeg": self._head_pose.roll_deg,
+            }
+
+        android_clients: list[dict[str, Any]] = []
+        for info in list(self._android_info.values()):
+            android_clients.append(
+                {
+                    "v": info.v,
+                    "client": info.client,
+                    "model": info.model,
+                    "sdkInt": info.sdk_int,
+                    "ageS": float(max(0.0, now - info.last_seen_monotonic)),
+                }
+            )
+
+        return {
+            "type": "status",
+            "server": "ok",
+            "android": {"eventsClients": len(self._android_events), "sttClients": len(self._android_stt), "clients": android_clients},
+            "esp32": esp32,
+            "androidMic": android_mic,
+            "sttAudioSource": self._stt_audio_source,
+            "headPose": head_pose,
+        }
+
     async def _status_loop(self) -> None:
         while True:
             await asyncio.sleep(1.0)
             now = asyncio.get_running_loop().time()
-            esp32 = {
-                role: {
-                    "deviceId": s.device_id,
-                    "role": s.role,
-                    "sampleRateHz": s.sample_rate_hz,
-                    "channels": s.channels,
-                    "frameMs": s.frame_ms,
-                    "bytesPerFrame": s.bytes_per_frame,
-                    "lastRms": s.last_rms,
-                    "droppedFrames": s.dropped_frames,
-                    "framesReceived": s.frames_received,
-                    "badFrameSizes": s.bad_frame_sizes,
-                    "sttQueue": s.stt_q.qsize(),
-                    "analysisQueue": s.analysis_q.qsize(),
-                }
-                for role, s in self._esp32_by_role.items()
-            }
-            android_mic = None
-            if self._android_mic_by_conn:
-                # Report only the freshest mic sender (hackathon assumption: 1 phone).
-                freshest = max(self._android_mic_by_conn.values(), key=lambda s: s.last_seen_monotonic)
-                android_mic = {
-                    "deviceId": freshest.device_id,
-                    "sampleRateHz": freshest.sample_rate_hz,
-                    "channels": freshest.channels,
-                    "frameMs": freshest.frame_ms,
-                    "lastRms": freshest.last_rms,
-                    "lastRmsLeft": freshest.last_rms_left,
-                    "lastRmsRight": freshest.last_rms_right,
-                    "droppedFrames": freshest.dropped_frames,
-                    "sttQueue": freshest.stt_q.qsize(),
-                    "analysisQueue": freshest.analysis_q.qsize(),
-                    "ageS": float(max(0.0, now - freshest.last_seen_monotonic)),
-                }
-            head_pose = None
-            if self._head_pose is not None:
-                head_pose = {
-                    "yawDeg": self._head_pose.yaw_deg,
-                    "pitchDeg": self._head_pose.pitch_deg,
-                    "rollDeg": self._head_pose.roll_deg,
-                }
-
-            android_clients: list[dict[str, Any]] = []
-            for info in list(self._android_info.values()):
-                android_clients.append(
-                    {
-                        "v": info.v,
-                        "client": info.client,
-                        "model": info.model,
-                        "sdkInt": info.sdk_int,
-                        "ageS": float(max(0.0, now - info.last_seen_monotonic)),
-                    }
-                )
-            await self._broadcast_events(
-                {
-                    "type": "status",
-                    "server": "ok",
-                    "android": {"eventsClients": len(self._android_events), "sttClients": len(self._android_stt), "clients": android_clients},
-                    "esp32": esp32,
-                    "androidMic": android_mic,
-                    "sttAudioSource": self._stt_audio_source,
-                    "headPose": head_pose,
-                }
-            )
+            await self._broadcast_events(self._build_status_payload(now))
 
     async def _stt_loop(self) -> None:
         api_key = (os.environ.get("ELEVENLABS_API_KEY") or "").strip()

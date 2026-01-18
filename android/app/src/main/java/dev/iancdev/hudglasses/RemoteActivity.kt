@@ -123,6 +123,12 @@ class RemoteActivity : ComponentActivity() {
                     RemoteUi(
                         onConnect = { wsController.connect(HudStore.state.value.serverUrl) },
                         onDisconnect = { wsController.disconnect() },
+                        onRequestStatus = {
+                            wsController.sendOnEventsChannel(
+                                JSONObject()
+                                    .put("type", "status.request")
+                            )
+                        },
                         onSetPhoneAudioFallbackEnabled = { enabled -> setPhoneAudioFallbackEnabled(enabled) },
                         onSetPhoneHapticsEnabled = { enabled -> setPhoneHapticsEnabled(enabled) },
                         onSetPhoneDirectionHapticsEnabled = { enabled -> setPhoneDirectionHapticsEnabled(enabled) },
@@ -313,6 +319,7 @@ class RemoteActivity : ComponentActivity() {
 private fun RemoteUi(
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
+    onRequestStatus: () -> Unit,
     onSetPhoneAudioFallbackEnabled: (Boolean) -> Unit,
     onSetPhoneHapticsEnabled: (Boolean) -> Unit,
     onSetPhoneDirectionHapticsEnabled: (Boolean) -> Unit,
@@ -417,6 +424,9 @@ private fun RemoteUi(
             }
             Button(onClick = onDisconnect) {
                 Text("Disconnect")
+            }
+            Button(onClick = onRequestStatus) {
+                Text("Refresh")
             }
             Text("Events: ${if (state.eventsConnected) "connected" else "disconnected"}")
             Text("STT: ${state.sttStatus.ifBlank { if (state.sttConnected) "connected" else "disconnected" }}")

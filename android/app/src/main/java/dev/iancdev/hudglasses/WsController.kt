@@ -125,6 +125,7 @@ class WsController(
                         .put("model", Build.MODEL)
                         .put("sdkInt", Build.VERSION.SDK_INT)
                 webSocket.send(hello.toString())
+                webSocket.send(JSONObject().put("type", "status.request").toString())
                 onMaybeFullyConnected()
             }
 
