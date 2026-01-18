@@ -28,20 +28,33 @@ class _UdpProtocol(asyncio.DatagramProtocol):
         self._queue = queue
         self._chunk_bytes = int(chunk_bytes)
         self._buf = bytearray()
+        self._packets = 0
+        self._last_sender = None
         self._total_received = 0
         self._total_emitted = 0
+        self._total_dropped_bytes = 0
+        self._frames_dropped_queue = 0
         self._last_log_s = 0.0
 
     def datagram_received(self, data: bytes, addr) -> None:  # type: ignore[override]
         if not data:
             return
+        self._packets += 1
         self._total_received += len(data)
         self._buf.extend(data)
+        self._last_sender = addr
+
+        # PCM16 alignment guard: if sender produces odd-length datagrams (or drops bytes),
+        # keep the stream aligned by dropping a trailing byte.
+        if (len(self._buf) % 2) != 0:
+            self._total_dropped_bytes += 1
+            self._buf.pop()
 
         # Avoid unbounded growth if the sender bursts or chunking is mismatched.
         max_buf = self._chunk_bytes * 40
         if len(self._buf) > max_buf:
             drop = len(self._buf) - max_buf
+            self._total_dropped_bytes += int(drop)
             del self._buf[:drop]
 
         while len(self._buf) >= self._chunk_bytes:
@@ -50,12 +63,14 @@ class _UdpProtocol(asyncio.DatagramProtocol):
             if self._queue.full():
                 try:
                     _ = self._queue.get_nowait()
+                    self._frames_dropped_queue += 1
                 except asyncio.QueueEmpty:
                     pass
             try:
                 self._queue.put_nowait(chunk)
                 self._total_emitted += len(chunk)
             except asyncio.QueueFull:
+                self._frames_dropped_queue += 1
                 pass
 
         loop = asyncio.get_running_loop()
@@ -63,13 +78,19 @@ class _UdpProtocol(asyncio.DatagramProtocol):
         if (now - self._last_log_s) >= 2.0:
             self._last_log_s = now
             logging.getLogger("udp_bridge").info(
-                "UDP %s port=%d recv=%dB emit=%dB buf=%dB",
+                "UDP %s port=%d packets=%d recv=%dB emit=%dB droppedBytes=%dB droppedFrames=%d buf=%dB q=%d",
                 self._role,
                 self._port,
+                self._packets,
                 self._total_received,
                 self._total_emitted,
+                self._total_dropped_bytes,
+                self._frames_dropped_queue,
                 len(self._buf),
+                self._queue.qsize(),
             )
+            if self._last_sender is not None:
+                logging.getLogger("udp_bridge").info("UDP %s lastSender=%s", self._role, self._last_sender)
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:  # type: ignore[override]
         sock = transport.get_extra_info("socket")
@@ -90,7 +111,13 @@ async def _ws_sender(
     backoff_s = 0.5
     while True:
         try:
-            async with websockets.connect(uri, max_size=2 * 1024 * 1024) as ws:
+            async with websockets.connect(
+                uri,
+                max_size=2 * 1024 * 1024,
+                open_timeout=5,
+                ping_interval=20,
+                ping_timeout=20,
+            ) as ws:
                 hello = {
                     "v": 1,
                     "type": "hello",
@@ -102,6 +129,16 @@ async def _ws_sender(
                 await ws.send(json.dumps(hello))
                 log.info("WS connected role=%s deviceId=%s -> %s", cfg.role, cfg.device_id, uri)
                 backoff_s = 0.5
+
+                drained = 0
+                while not queue.empty():
+                    try:
+                        _ = queue.get_nowait()
+                        drained += 1
+                    except asyncio.QueueEmpty:
+                        break
+                if drained:
+                    log.info("WS role=%s drained=%d stale frames before send loop", cfg.role, drained)
 
                 while True:
                     chunk = await queue.get()
@@ -129,6 +166,12 @@ async def main() -> None:
         default=640,
         help="How many bytes to forward per WS binary message (recommended 640 = 16kHz*20ms*2B)",
     )
+    parser.add_argument(
+        "--queue-max-frames",
+        type=int,
+        default=50,
+        help="Max queued audio frames per role (lower = lower latency under load; default 50 ~= 1s at 20ms)",
+    )
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
 
@@ -139,12 +182,28 @@ async def main() -> None:
     sample_rate_hz = int(args.sample_rate)
     frame_ms = int(args.frame_ms)
     chunk_bytes = int(args.chunk_bytes)
+    channels = 1
+
+    if chunk_bytes <= 0:
+        raise SystemExit("--chunk-bytes must be > 0")
+    if (chunk_bytes % 2) != 0:
+        raise SystemExit("--chunk-bytes must be even (PCM16 alignment)")
+    expected_chunk_bytes = int(sample_rate_hz * (frame_ms / 1000.0) * 2 * channels)
+    if chunk_bytes != expected_chunk_bytes:
+        log.warning(
+            "chunk_bytes=%d does not match sample_rate=%d frame_ms=%d (expected %d). Server will log unexpected frame sizes.",
+            chunk_bytes,
+            sample_rate_hz,
+            frame_ms,
+            expected_chunk_bytes,
+        )
 
     left_cfg = RoleCfg(role="left", udp_port=int(args.left_port), device_id=str(args.left_device_id))
     right_cfg = RoleCfg(role="right", udp_port=int(args.right_port), device_id=str(args.right_device_id))
 
-    left_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=400)
-    right_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=400)
+    queue_max_frames = max(1, int(args.queue_max_frames))
+    left_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=queue_max_frames)
+    right_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=queue_max_frames)
 
     loop = asyncio.get_running_loop()
     left_transport, _ = await loop.create_datagram_endpoint(
@@ -157,13 +216,14 @@ async def main() -> None:
     )
 
     log.info(
-        "Listening UDP left=%d right=%d -> %s (frame_ms=%d sample_rate=%d chunk_bytes=%d)",
+        "Listening UDP left=%d right=%d -> %s (frame_ms=%d sample_rate=%d chunk_bytes=%d queue_max_frames=%d)",
         left_cfg.udp_port,
         right_cfg.udp_port,
         server_base,
         frame_ms,
         sample_rate_hz,
         chunk_bytes,
+        queue_max_frames,
     )
 
     try:

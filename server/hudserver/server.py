@@ -23,6 +23,7 @@ class Esp32AudioState:
     device_id: str
     role: str
     sample_rate_hz: int
+    channels: int
     frame_ms: int
     bytes_per_frame: int
     stt_q: asyncio.Queue[bytes]
@@ -30,6 +31,8 @@ class Esp32AudioState:
     last_rms: float
     last_seen_monotonic: float
     dropped_frames: int
+    frames_received: int = 0
+    bad_frame_sizes: int = 0
 
 
 @dataclass(slots=True)
@@ -499,7 +502,7 @@ class HudServer:
     async def _handle_esp32_audio(self, conn: ServerConnection, query: dict[str, list[str]]) -> None:
         device_id = (query.get("deviceId") or [""])[0] or "unknown"
         role = (query.get("role") or [""])[0] or "unknown"
-        self._logger.info("ESP32 connected deviceId=%s role=%s from %s", device_id, role, conn.remote_address)
+        self._logger.info("ESP32 connected (query) deviceId=%s role=%s from %s", device_id, role, conn.remote_address)
 
         # Expect a JSON hello first, then binary audio frames.
         hello = await conn.recv()
@@ -516,6 +519,9 @@ class HudServer:
             audio_format = str(audio.get("format") or "pcm_s16le")
             sample_rate_hz = int(audio.get("sampleRateHz") or 16000)
             frame_ms = int(audio.get("frameMs") or 20)
+            channels = int(audio.get("channels") or 1)
+            fw_version = str(hello_obj.get("fwVersion") or "")
+            v = hello_obj.get("v")
             hello_role = (hello_obj.get("role") or role) or "unknown"
             hello_device_id = (hello_obj.get("deviceId") or device_id) or "unknown"
         except Exception:
@@ -523,18 +529,52 @@ class HudServer:
             await conn.close(code=1003, reason="Invalid hello")
             return
 
+        if hello_device_id != device_id or hello_role != role:
+            self._logger.info(
+                "ESP32 hello overrides query deviceId=%s->%s role=%s->%s from %s",
+                device_id,
+                hello_device_id,
+                role,
+                hello_role,
+                conn.remote_address,
+            )
+
         if audio_format != "pcm_s16le":
             self._logger.warning("ESP32 %s role=%s audio.format=%s (expected pcm_s16le)", hello_device_id, hello_role, audio_format)
+        if channels != 1:
+            self._logger.warning("ESP32 %s role=%s audio.channels=%d (expected 1)", hello_device_id, hello_role, channels)
 
         samples_per_frame = int(sample_rate_hz * (frame_ms / 1000.0))
-        bytes_per_frame = samples_per_frame * 2
+        bytes_per_frame = samples_per_frame * 2 * max(1, channels)
+
+        self._logger.info(
+            "ESP32 hello deviceId=%s role=%s v=%s fwVersion=%s audio.format=%s sampleRateHz=%d channels=%d frameMs=%d expectedBytes=%d",
+            hello_device_id,
+            hello_role,
+            v,
+            fw_version,
+            audio_format,
+            sample_rate_hz,
+            channels,
+            frame_ms,
+            bytes_per_frame,
+        )
 
         stt_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=200)  # ~4s at 20ms frames
         analysis_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=200)  # ~4s at 20ms frames
+        prev = self._esp32_by_role.get(hello_role)
+        if prev is not None and prev.device_id != hello_device_id:
+            self._logger.info(
+                "ESP32 role replacement role=%s prevDeviceId=%s -> newDeviceId=%s",
+                hello_role,
+                prev.device_id,
+                hello_device_id,
+            )
         self._esp32_by_role[hello_role] = Esp32AudioState(
             device_id=hello_device_id,
             role=hello_role,
             sample_rate_hz=sample_rate_hz,
+            channels=channels,
             frame_ms=frame_ms,
             bytes_per_frame=bytes_per_frame,
             stt_q=stt_q,
@@ -557,16 +597,21 @@ class HudServer:
                     continue
 
                 state.last_seen_monotonic = asyncio.get_running_loop().time()
+                state.frames_received += 1
 
                 if len(msg) != state.bytes_per_frame:
                     # Allow slightly variable frames, but log so firmware can be fixed.
-                    self._logger.warning(
-                        "ESP32 %s role=%s unexpected frame size=%d expected=%d",
-                        state.device_id,
-                        state.role,
-                        len(msg),
-                        state.bytes_per_frame,
-                    )
+                    state.bad_frame_sizes += 1
+                    # Keep this INFO to reduce log spam when using the UDP bridge / early firmware.
+                    if state.bad_frame_sizes <= 3 or (state.bad_frame_sizes % 50) == 0:
+                        self._logger.info(
+                            "ESP32 %s role=%s unexpected frame size=%d expected=%d badFrameSizes=%d",
+                            state.device_id,
+                            state.role,
+                            len(msg),
+                            state.bytes_per_frame,
+                            state.bad_frame_sizes,
+                        )
 
                 # Compute RMS (0..1) for direction/intensity.
                 try:
@@ -609,7 +654,14 @@ class HudServer:
             cur = self._esp32_by_role.get(hello_role)
             if cur and cur.device_id == hello_device_id:
                 self._esp32_by_role.pop(hello_role, None)
-            self._logger.info("ESP32 disconnected deviceId=%s role=%s", hello_device_id, hello_role)
+            self._logger.info(
+                "ESP32 disconnected deviceId=%s role=%s frames=%s dropped=%s badFrameSizes=%s",
+                hello_device_id,
+                hello_role,
+                getattr(cur, "frames_received", None),
+                getattr(cur, "dropped_frames", None),
+                getattr(cur, "bad_frame_sizes", None),
+            )
 
     async def _broadcast_events(self, obj: dict[str, Any]) -> None:
         if not self._android_events:
@@ -642,9 +694,13 @@ class HudServer:
                     "deviceId": s.device_id,
                     "role": s.role,
                     "sampleRateHz": s.sample_rate_hz,
+                    "channels": s.channels,
                     "frameMs": s.frame_ms,
+                    "bytesPerFrame": s.bytes_per_frame,
                     "lastRms": s.last_rms,
                     "droppedFrames": s.dropped_frames,
+                    "framesReceived": s.frames_received,
+                    "badFrameSizes": s.bad_frame_sizes,
                     "sttQueue": s.stt_q.qsize(),
                     "analysisQueue": s.analysis_q.qsize(),
                 }
