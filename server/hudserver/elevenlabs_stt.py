@@ -21,7 +21,7 @@ class ElevenLabsConfig:
     language_code: str | None = None
     audio_format: str = "pcm_16000"
     commit_strategy: str = "vad"
-    vad_silence_threshold_secs: float = 0.3
+    vad_silence_threshold_secs: float = 1.2
     include_timestamps: bool = False
 
 

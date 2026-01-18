@@ -89,6 +89,7 @@ class HudServer:
 
         self._world_direction_deg: float | None = None
         self._latest_direction_payload: dict[str, Any] = {}
+        self._direction_log_last_s: float = 0.0
 
         self._keywords: list[str] = []
         self._keyword_cooldown_s: float = float(os.environ.get("KEYWORD_COOLDOWN_S", "5"))
@@ -576,7 +577,7 @@ class HudServer:
             model_id=(os.environ.get("ELEVENLABS_MODEL_ID") or None),
             language_code=(os.environ.get("ELEVENLABS_LANGUAGE_CODE") or None),
             commit_strategy=(os.environ.get("ELEVENLABS_COMMIT_STRATEGY") or "vad"),
-            vad_silence_threshold_secs=float(os.environ.get("ELEVENLABS_VAD_SILENCE_THRESHOLD_SECS") or "0.3"),
+            vad_silence_threshold_secs=float(os.environ.get("ELEVENLABS_VAD_SILENCE_THRESHOLD_SECS") or "1.2"),
             include_timestamps=(os.environ.get("ELEVENLABS_INCLUDE_TIMESTAMPS") == "1"),
         )
         stt = ElevenLabsRealtimeStt(cfg)
@@ -750,6 +751,18 @@ class HudServer:
                 **ui,
             }
             self._latest_direction_payload = payload
+            self._log_direction_debug(
+                now=now,
+                source=source,
+                raw_direction_deg=raw_direction_deg,
+                direction_deg=direction_deg,
+                intensity=intensity,
+                fl=fl,
+                fr=fr,
+                bl=bl,
+                br=br,
+                ui=ui,
+            )
             await self._broadcast_events({"type": "direction.ui", **payload})
 
     async def _alarms_loop(self) -> None:
@@ -907,6 +920,41 @@ class HudServer:
 
     def _current_direction_payload(self) -> dict[str, Any]:
         return dict(self._latest_direction_payload)
+
+    def _log_direction_debug(
+        self,
+        *,
+        now: float,
+        source: str,
+        raw_direction_deg: float,
+        direction_deg: float,
+        intensity: float,
+        fl: float,
+        fr: float,
+        bl: float,
+        br: float,
+        ui: dict[str, Any],
+    ) -> None:
+        # Avoid spamming logs; direction loop runs at 20Hz.
+        if (now - self._direction_log_last_s) < 1.0:
+            return
+        self._direction_log_last_s = now
+
+        self._logger.debug(
+            "Direction source=%s raw=%.1f stabilized=%.1f intensity=%.2f rms(fl=%.3f fr=%.3f bl=%.3f br=%.3f) ui=(x=%.2f y=%.2f glow=%s strength=%.2f)",
+            source,
+            raw_direction_deg,
+            direction_deg,
+            intensity,
+            fl,
+            fr,
+            bl,
+            br,
+            float(ui.get("radarX", 0.0)),
+            float(ui.get("radarY", 0.0)),
+            str(ui.get("glowEdge", "")),
+            float(ui.get("glowStrength", 0.0)),
+        )
 
     def _wrap_deg(self, deg: float) -> float:
         return ((deg + 180.0) % 360.0) - 180.0
