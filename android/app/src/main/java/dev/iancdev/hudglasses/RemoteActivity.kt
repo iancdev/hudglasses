@@ -200,6 +200,14 @@ class RemoteActivity : ComponentActivity() {
                                     .put("esp32GainRight", esp32GainRight)
                             )
                         },
+                        onApplyPoseTuning = { invertHeadYaw, invertPhoneYaw ->
+                            wsController.sendOnEventsChannel(
+                                JSONObject()
+                                    .put("type", "config.update")
+                                    .put("invertHeadYaw", invertHeadYaw)
+                                    .put("invertPhoneYaw", invertPhoneYaw),
+                            )
+                        },
                     )
                 }
             }
@@ -367,6 +375,7 @@ private fun RemoteUi(
     onApplyThresholds: (Float, Float, Float) -> Unit,
     onApplyKeywords: (String, Float) -> Unit,
     onApplyDirectionTuning: (Float, Float, Float, Float, Float) -> Unit,
+    onApplyPoseTuning: (Boolean, Boolean) -> Unit,
 ) {
     val state by HudStore.state.collectAsState()
     var url by remember(state.serverUrl) { mutableStateOf(state.serverUrl) }
@@ -442,6 +451,25 @@ private fun RemoteUi(
             Button(onClick = { onSetVitureImuFreq(1) }) { Text("90") }
             Button(onClick = { onSetVitureImuFreq(2) }) { Text("120") }
             Button(onClick = { onSetVitureImuFreq(3) }) { Text("240") }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Invert head yaw")
+            Switch(
+                checked = state.invertHeadYaw,
+                onCheckedChange = { enabled ->
+                    HudStore.update { it.copy(invertHeadYaw = enabled) }
+                    onApplyPoseTuning(enabled, state.invertPhoneYaw)
+                },
+            )
+            Text("Invert phone yaw")
+            Switch(
+                checked = state.invertPhoneYaw,
+                onCheckedChange = { enabled ->
+                    HudStore.update { it.copy(invertPhoneYaw = enabled) }
+                    onApplyPoseTuning(state.invertHeadYaw, enabled)
+                },
+            )
         }
 
         OutlinedTextField(

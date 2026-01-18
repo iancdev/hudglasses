@@ -171,6 +171,8 @@ class HudServer:
         self._torso_pose: TorsoPoseState | None = None
         self._cal_head_yaw0: float | None = None
         self._cal_torso_yaw0: float | None = None
+        self._invert_head_yaw: bool = _parse_bool(os.environ.get("INVERT_HEAD_YAW"), default=False)
+        self._invert_phone_yaw: bool = _parse_bool(os.environ.get("INVERT_PHONE_YAW"), default=False)
 
         self._smoothed_torso_direction_deg: float | None = None
         self._latest_direction_payload: dict[str, Any] = {}
@@ -543,6 +545,8 @@ class HudServer:
                         roll = float(obj.get("roll"))
                     except Exception:
                         continue
+                    if self._invert_head_yaw:
+                        yaw = -yaw
                     self._head_pose = HeadPoseState(
                         yaw_deg=yaw,
                         pitch_deg=pitch,
@@ -554,6 +558,8 @@ class HudServer:
                         yaw = float(obj.get("yawDeg", obj.get("yaw")))
                     except Exception:
                         continue
+                    if self._invert_phone_yaw:
+                        yaw = -yaw
                     self._torso_pose = TorsoPoseState(
                         yaw_deg=yaw,
                         last_seen_monotonic=asyncio.get_running_loop().time(),
@@ -587,6 +593,10 @@ class HudServer:
                     self._fire_ratio_threshold = float(obj.get("fireRatioThreshold", self._fire_ratio_threshold))
                     self._horn_ratio_threshold = float(obj.get("hornRatioThreshold", self._horn_ratio_threshold))
                     self._keyword_cooldown_s = float(obj.get("keywordCooldownS", self._keyword_cooldown_s))
+                    if obj.get("invertHeadYaw") is not None:
+                        self._invert_head_yaw = _parse_bool(str(obj.get("invertHeadYaw")), default=False)
+                    if obj.get("invertPhoneYaw") is not None:
+                        self._invert_phone_yaw = _parse_bool(str(obj.get("invertPhoneYaw")), default=False)
                     if obj.get("esp32GainLeft") is not None:
                         self._esp32_gain_left = float(obj.get("esp32GainLeft"))
                     if obj.get("esp32GainRight") is not None:
@@ -1099,6 +1109,8 @@ class HudServer:
                 "yamnetTop": [{"label": n, "score": float(s)} for (n, s) in self._yamnet_last_top[:10]],
             },
             "directionConfig": {
+                "invertHeadYaw": bool(self._invert_head_yaw),
+                "invertPhoneYaw": bool(self._invert_phone_yaw),
                 "hybridFrontBackGain": self._hybrid_front_back_gain,
                 "hybridFrontGain": self._hybrid_front_gain,
                 "hybridBackGain": self._hybrid_back_gain,

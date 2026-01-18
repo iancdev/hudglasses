@@ -51,6 +51,8 @@ data class HudState(
     val vitureImuState: Int? = null,
     val viture3dState: Int? = null,
     val vitureImuFrequency: Int? = null,
+    val invertHeadYaw: Boolean = false,
+    val invertPhoneYaw: Boolean = false,
     val alarmRmsThreshold: Float = 0.02f,
     val fireRatioThreshold: Float = 0.18f,
     val hornRatioThreshold: Float = 0.20f,

@@ -256,6 +256,8 @@ class WsController(
         val sirenActive = alarms?.optBoolean("sirenActive", false) == true
 
         val directionConfig = obj.optJSONObject("directionConfig")
+        val invertHeadYaw = directionConfig?.let { if (it.has("invertHeadYaw")) it.optBoolean("invertHeadYaw", false) else null }
+        val invertPhoneYaw = directionConfig?.let { if (it.has("invertPhoneYaw")) it.optBoolean("invertPhoneYaw", false) else null }
         val hybridFrontBackGain = directionConfig?.optDouble("hybridFrontBackGain", Double.NaN)?.toFloat()
         val hybridFrontGain = directionConfig?.optDouble("hybridFrontGain", Double.NaN)?.toFloat()
         val hybridBackGain = directionConfig?.optDouble("hybridBackGain", Double.NaN)?.toFloat()
@@ -269,6 +271,8 @@ class WsController(
                 externalHapticsEnabled = extEnabled,
                 externalHapticsLeftConnected = extLeftConnected,
                 externalHapticsRightConnected = extRightConnected,
+                invertHeadYaw = invertHeadYaw ?: it.invertHeadYaw,
+                invertPhoneYaw = invertPhoneYaw ?: it.invertPhoneYaw,
                 hybridFrontBackGain = hybridFrontBackGain?.takeIf { it.isFinite() } ?: it.hybridFrontBackGain,
                 hybridFrontGain = hybridFrontGain?.takeIf { it.isFinite() } ?: it.hybridFrontGain,
                 hybridBackGain = hybridBackGain?.takeIf { it.isFinite() } ?: it.hybridBackGain,
