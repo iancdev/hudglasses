@@ -254,6 +254,13 @@ class WsController(
         val fireActive = alarms?.optBoolean("fireActive", false) == true
         val hornActive = alarms?.optBoolean("carHornActive", false) == true
         val sirenActive = alarms?.optBoolean("sirenActive", false) == true
+
+        val directionConfig = obj.optJSONObject("directionConfig")
+        val hybridFrontBackGain = directionConfig?.optDouble("hybridFrontBackGain", Double.NaN)?.toFloat()
+        val hybridFrontGain = directionConfig?.optDouble("hybridFrontGain", Double.NaN)?.toFloat()
+        val hybridBackGain = directionConfig?.optDouble("hybridBackGain", Double.NaN)?.toFloat()
+        val esp32GainLeft = directionConfig?.optDouble("esp32GainLeft", Double.NaN)?.toFloat()
+        val esp32GainRight = directionConfig?.optDouble("esp32GainRight", Double.NaN)?.toFloat()
         HudStore.update {
             it.copy(
                 serverStatus = obj.optString("server", it.serverStatus),
@@ -262,6 +269,11 @@ class WsController(
                 externalHapticsEnabled = extEnabled,
                 externalHapticsLeftConnected = extLeftConnected,
                 externalHapticsRightConnected = extRightConnected,
+                hybridFrontBackGain = hybridFrontBackGain?.takeIf { it.isFinite() } ?: it.hybridFrontBackGain,
+                hybridFrontGain = hybridFrontGain?.takeIf { it.isFinite() } ?: it.hybridFrontGain,
+                hybridBackGain = hybridBackGain?.takeIf { it.isFinite() } ?: it.hybridBackGain,
+                esp32GainLeft = esp32GainLeft?.takeIf { it.isFinite() } ?: it.esp32GainLeft,
+                esp32GainRight = esp32GainRight?.takeIf { it.isFinite() } ?: it.esp32GainRight,
                 fireAlarm = if (fireActive || sirenActive) "active" else "idle",
                 carHorn = if (hornActive) "active" else "idle",
                 siren = if (sirenActive) "active" else "idle",
@@ -297,6 +309,14 @@ class WsController(
                 radarDots = dots,
                 glowEdge = obj.optString("glowEdge", "top"),
                 glowStrength = obj.optDouble("glowStrength", 0.0).toFloat(),
+                esp32RmsLeft = obj.optDouble("rmsFl", 0.0).toFloat(),
+                esp32RmsRight = obj.optDouble("rmsFr", 0.0).toFloat(),
+                phoneBackRmsLeft = obj.optDouble("rmsBl", 0.0).toFloat(),
+                phoneBackRmsRight = obj.optDouble("rmsBr", 0.0).toFloat(),
+                frontTotal = obj.optDouble("frontTotal", 0.0).toFloat(),
+                backTotal = obj.optDouble("backTotal", 0.0).toFloat(),
+                xBalance = obj.optDouble("xBalance", 0.0).toFloat(),
+                yBalance = obj.optDouble("yBalance", 0.0).toFloat(),
             )
         }
     }

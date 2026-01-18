@@ -11,13 +11,17 @@ import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -25,6 +29,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
@@ -35,11 +40,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.math.log10
 
 class RemoteActivity : ComponentActivity() {
     private var hudPresentation: HudPresentation? = null
@@ -179,6 +187,17 @@ class RemoteActivity : ComponentActivity() {
                                     .put("type", "config.update")
                                     .put("keywordCooldownS", cooldownS)
                                     .put("keywords", JSONArray(keywords))
+                            )
+                        },
+                        onApplyDirectionTuning = { frontBackGain, frontGain, backGain, esp32GainLeft, esp32GainRight ->
+                            wsController.sendOnEventsChannel(
+                                JSONObject()
+                                    .put("type", "config.update")
+                                    .put("hybridFrontBackGain", frontBackGain)
+                                    .put("hybridFrontGain", frontGain)
+                                    .put("hybridBackGain", backGain)
+                                    .put("esp32GainLeft", esp32GainLeft)
+                                    .put("esp32GainRight", esp32GainRight)
                             )
                         },
                     )
@@ -347,6 +366,7 @@ private fun RemoteUi(
     onApplyVitureHudDefaults: () -> Unit,
     onApplyThresholds: (Float, Float, Float) -> Unit,
     onApplyKeywords: (String, Float) -> Unit,
+    onApplyDirectionTuning: (Float, Float, Float, Float, Float) -> Unit,
 ) {
     val state by HudStore.state.collectAsState()
     var url by remember(state.serverUrl) { mutableStateOf(state.serverUrl) }
@@ -552,6 +572,168 @@ private fun RemoteUi(
         }
 
         Text("Direction: ${"%.1f".format(state.directionDeg)}°  intensity=${"%.2f".format(state.intensity)}")
+        DirectionTrackingBars(
+            fl = state.esp32RmsLeft,
+            fr = state.esp32RmsRight,
+            bl = state.phoneBackRmsLeft,
+            br = state.phoneBackRmsRight,
+            frontTotal = state.frontTotal,
+            backTotal = state.backTotal,
+            xBalance = state.xBalance,
+            yBalance = state.yBalance,
+        )
+        DirectionTuningSliders(
+            hybridFrontBackGain = state.hybridFrontBackGain,
+            hybridFrontGain = state.hybridFrontGain,
+            hybridBackGain = state.hybridBackGain,
+            esp32GainLeft = state.esp32GainLeft,
+            esp32GainRight = state.esp32GainRight,
+            onApply = onApplyDirectionTuning,
+        )
+    }
+}
+
+@Composable
+private fun DirectionTrackingBars(
+    fl: Float,
+    fr: Float,
+    bl: Float,
+    br: Float,
+    frontTotal: Float,
+    backTotal: Float,
+    xBalance: Float,
+    yBalance: Float,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Tracking (levels)", fontWeight = FontWeight.SemiBold)
+        LevelRow(label = "Front L (ESP32)", rms = fl)
+        LevelRow(label = "Front R (ESP32)", rms = fr)
+        LevelRow(label = "Back L (Phone)", rms = bl)
+        LevelRow(label = "Back R (Phone)", rms = br)
+
+        val ft = frontTotal.coerceAtLeast(0f)
+        val bt = backTotal.coerceAtLeast(0f)
+        val fbRatio = if (ft + bt <= 1e-6f) 0f else ((ft - bt) / (ft + bt)).coerceIn(-1f, 1f)
+        Text(
+            "Totals: front=${"%.4f".format(ft)} back=${"%.4f".format(bt)}  " +
+                "fbRatio=${"%.3f".format(fbRatio)}  x=${"%.3f".format(xBalance)} y=${"%.3f".format(yBalance)}"
+        )
+    }
+}
+
+@Composable
+private fun LevelRow(label: String, rms: Float) {
+    val safeRms = rms.coerceAtLeast(0f)
+    val dbfs = rmsToDbfs(safeRms)
+    val progress = dbfsToProgress(dbfs)
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("$label: ${"%.4f".format(safeRms)} (${String.format("%.1f", dbfs)} dBFS)")
+        LevelBar(progress = progress)
+    }
+}
+
+@Composable
+private fun LevelBar(progress: Float) {
+    val p = progress.coerceIn(0f, 1f)
+    Box(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .height(10.dp)
+                .background(color = Color(0xFF2A2A2A), shape = RoundedCornerShape(6.dp))
+    ) {
+        Box(
+            modifier =
+                Modifier
+                    .fillMaxWidth(fraction = p)
+                    .height(10.dp)
+                    .background(color = Color(0xFF4CAF50), shape = RoundedCornerShape(6.dp))
+        )
+    }
+}
+
+private fun rmsToDbfs(rms: Float): Float {
+    val r = rms.coerceAtLeast(1e-8f)
+    return 20f * log10(r)
+}
+
+private fun dbfsToProgress(dbfs: Float): Float {
+    val clamped = dbfs.coerceIn(-60f, 0f)
+    return (clamped + 60f) / 60f
+}
+
+@Composable
+private fun DirectionTuningSliders(
+    hybridFrontBackGain: Float,
+    hybridFrontGain: Float,
+    hybridBackGain: Float,
+    esp32GainLeft: Float,
+    esp32GainRight: Float,
+    onApply: (Float, Float, Float, Float, Float) -> Unit,
+) {
+    var fbGain by remember(hybridFrontBackGain) { mutableStateOf(hybridFrontBackGain) }
+    var frontGain by remember(hybridFrontGain) { mutableStateOf(hybridFrontGain) }
+    var backGain by remember(hybridBackGain) { mutableStateOf(hybridBackGain) }
+    var gLeft by remember(esp32GainLeft) { mutableStateOf(esp32GainLeft) }
+    var gRight by remember(esp32GainRight) { mutableStateOf(esp32GainRight) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("Tuning (live)", fontWeight = FontWeight.SemiBold)
+
+        SliderRow(
+            label = "Front/back pull (HYBRID_FRONT_BACK_GAIN)",
+            value = fbGain,
+            range = 0f..3f,
+            onValueChange = { fbGain = it },
+            onFinished = { onApply(fbGain, frontGain, backGain, gLeft, gRight) },
+        )
+        SliderRow(
+            label = "Front weight (HYBRID_FRONT_GAIN)",
+            value = frontGain,
+            range = 0f..3f,
+            onValueChange = { frontGain = it },
+            onFinished = { onApply(fbGain, frontGain, backGain, gLeft, gRight) },
+        )
+        SliderRow(
+            label = "Back weight (HYBRID_BACK_GAIN)",
+            value = backGain,
+            range = 0f..3f,
+            onValueChange = { backGain = it },
+            onFinished = { onApply(fbGain, frontGain, backGain, gLeft, gRight) },
+        )
+        SliderRow(
+            label = "ESP32 gain left (ESP32_GAIN_LEFT)",
+            value = gLeft,
+            range = 0f..3f,
+            onValueChange = { gLeft = it },
+            onFinished = { onApply(fbGain, frontGain, backGain, gLeft, gRight) },
+        )
+        SliderRow(
+            label = "ESP32 gain right (ESP32_GAIN_RIGHT)",
+            value = gRight,
+            range = 0f..3f,
+            onValueChange = { gRight = it },
+            onFinished = { onApply(fbGain, frontGain, backGain, gLeft, gRight) },
+        )
+    }
+}
+
+@Composable
+private fun SliderRow(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    onValueChange: (Float) -> Unit,
+    onFinished: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("$label: ${"%.2f".format(value)}")
+        Slider(
+            value = value.coerceIn(range.start, range.endInclusive),
+            onValueChange = onValueChange,
+            valueRange = range,
+            onValueChangeFinished = onFinished,
+        )
     }
 }
 

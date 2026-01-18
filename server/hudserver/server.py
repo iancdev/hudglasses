@@ -593,6 +593,15 @@ class HudServer:
                         self._esp32_gain_right = float(obj.get("esp32GainRight"))
                     self._esp32_gain_left = max(0.0, float(self._esp32_gain_left))
                     self._esp32_gain_right = max(0.0, float(self._esp32_gain_right))
+                    if obj.get("hybridFrontBackGain") is not None:
+                        self._hybrid_front_back_gain = float(obj.get("hybridFrontBackGain"))
+                    if obj.get("hybridFrontGain") is not None:
+                        self._hybrid_front_gain = float(obj.get("hybridFrontGain"))
+                    if obj.get("hybridBackGain") is not None:
+                        self._hybrid_back_gain = float(obj.get("hybridBackGain"))
+                    self._hybrid_front_back_gain = max(0.0, float(self._hybrid_front_back_gain))
+                    self._hybrid_front_gain = max(0.0, float(self._hybrid_front_gain))
+                    self._hybrid_back_gain = max(0.0, float(self._hybrid_back_gain))
                     if obj.get("yamnetFireThreshold") is not None:
                         self._yamnet_fire_threshold = float(obj.get("yamnetFireThreshold"))
                     if obj.get("yamnetHornThreshold") is not None:
@@ -1275,9 +1284,9 @@ class HudServer:
                 x_balance = float((br - bl) / (back_total + eps))  # -1..+1 (phone decides L/R)
                 front_gain = max(0.0, float(self._hybrid_front_gain))
                 back_gain = max(0.0, float(self._hybrid_back_gain))
-                front_total *= front_gain
-                back_total *= back_gain
-                y_balance = float((front_total - back_total) / (front_total + back_total + eps))  # -1..+1 (front/back)
+                front_scaled = front_total * front_gain
+                back_scaled = back_total * back_gain
+                y_balance = float((front_scaled - back_scaled) / (front_scaled + back_scaled + eps))  # -1..+1 (front/back)
                 x_balance = float(np.clip(x_balance, -1.0, 1.0))
                 y_balance = float(y_balance * float(self._hybrid_front_back_gain))
                 y_balance = float(np.clip(y_balance, -1.0, 1.0))
@@ -1343,6 +1352,15 @@ class HudServer:
                 "torsoDirectionDeg": float(torso_dir_deg),
                 "deltaYawDeg": float(delta_yaw),
                 "intensity": intensity,
+                "rmsFl": float(fl),
+                "rmsFr": float(fr),
+                "rmsBl": float(bl),
+                "rmsBr": float(br),
+                "frontTotal": float(fl + fr),
+                "backTotal": float(bl + br),
+                # Helpful debug for tuning (only meaningful when has_back==True).
+                "xBalance": float((br - bl) / (float(bl + br) + 1e-6)),
+                "yBalance": float(y_balance) if source == "quad" else None,
                 "radarDots": radar_dots,
                 **ui,
             }
@@ -1510,9 +1528,9 @@ class HudServer:
                 x_balance = float((e_br - e_bl) / (back_total + eps))
                 front_gain = max(0.0, float(self._hybrid_front_gain))
                 back_gain = max(0.0, float(self._hybrid_back_gain))
-                front_total *= front_gain
-                back_total *= back_gain
-                y_balance = float((front_total - back_total) / (front_total + back_total + eps))
+                front_scaled = front_total * front_gain
+                back_scaled = back_total * back_gain
+                y_balance = float((front_scaled - back_scaled) / (front_scaled + back_scaled + eps))
                 x_balance = float(np.clip(x_balance, -1.0, 1.0))
                 y_balance = float(y_balance * float(self._hybrid_front_back_gain))
                 y_balance = float(np.clip(y_balance, -1.0, 1.0))
