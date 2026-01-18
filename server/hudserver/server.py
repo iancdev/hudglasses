@@ -6,7 +6,7 @@ import os
 from collections import deque
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlunparse
 
 import numpy as np
 import websockets
@@ -23,6 +23,32 @@ def _parse_bool(raw: str | None, default: bool = False) -> bool:
     if raw is None:
         return bool(default)
     return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _ensure_ws_port(url: str, default_port: int) -> str:
+    """If URL has no explicit port, add default_port."""
+    u = (url or "").strip()
+    if not u:
+        return u
+    parsed = urlparse(u)
+    scheme = parsed.scheme or "ws"
+    netloc = parsed.netloc or parsed.path
+    path = parsed.path if parsed.netloc else ""
+    parsed = parsed._replace(scheme=scheme, netloc=netloc, path=path)
+    host = parsed.hostname
+    if not host:
+        return u
+    if parsed.port is not None:
+        return urlunparse(parsed)
+    userinfo = ""
+    if parsed.username:
+        userinfo = parsed.username
+        if parsed.password:
+            userinfo += f":{parsed.password}"
+        userinfo += "@"
+    port = int(default_port)
+    netloc = f"{userinfo}{host}:{port}"
+    return urlunparse(parsed._replace(netloc=netloc))
 
 
 @dataclass(slots=True)
@@ -259,8 +285,14 @@ class HudServer:
         # External haptics over WebSocket (left/right devices).
         # Defaults to ON for hackathon convenience.
         self._external_haptics_enabled: bool = _parse_bool(os.environ.get("EXTERNAL_HAPTICS"), default=True)
-        self._external_haptics_left_url: str = (os.environ.get("EXTERNAL_HAPTICS_LEFT_URL") or "ws://10.19.129.145").strip()
-        self._external_haptics_right_url: str = (os.environ.get("EXTERNAL_HAPTICS_RIGHT_URL") or "ws://10.19.130.147").strip()
+        self._external_haptics_left_url: str = _ensure_ws_port(
+            (os.environ.get("EXTERNAL_HAPTICS_LEFT_URL") or "ws://10.19.129.145:81").strip(),
+            81,
+        )
+        self._external_haptics_right_url: str = _ensure_ws_port(
+            (os.environ.get("EXTERNAL_HAPTICS_RIGHT_URL") or "ws://10.19.130.147:81").strip(),
+            81,
+        )
         self._external_haptics_format: str = (os.environ.get("EXTERNAL_HAPTICS_FORMAT") or "csv").strip().lower()
         self._external_haptics_intensity: int = int(os.environ.get("EXTERNAL_HAPTICS_INTENSITY") or "255")
         self._external_haptics_keyword_ms: int = int(os.environ.get("EXTERNAL_HAPTICS_KEYWORD_MS") or "250")
