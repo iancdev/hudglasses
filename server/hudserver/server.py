@@ -142,6 +142,7 @@ class HudServer:
         self._smoothed_torso_direction_deg: float | None = None
         self._latest_direction_payload: dict[str, Any] = {}
         self._direction_log_last_s: float = 0.0
+        self._esp32_level_log_last_s: float = 0.0
         self._direction_noise_floor: float = float(os.environ.get("DIRECTION_NOISE_FLOOR", "0.002"))
         self._direction_gain_quad: float = float(os.environ.get("DIRECTION_GAIN_QUAD", "4.5"))
         self._direction_gain_lr: float = float(os.environ.get("DIRECTION_GAIN_LR", "6.0"))
@@ -993,6 +994,8 @@ class HudServer:
             await asyncio.sleep(0.05)  # 20Hz
             now = asyncio.get_running_loop().time()
 
+            self._log_esp32_audio_levels(now=now)
+
             if (now - self._radar_last_compute_s) >= 0.2:
                 self._radar_last_compute_s = now
                 self._update_radar_tracks(now)
@@ -1553,6 +1556,37 @@ class HudServer:
             float(ui.get("radarY", 0.0)),
             str(ui.get("glowEdge", "")),
             float(ui.get("glowStrength", 0.0)),
+        )
+
+    def _log_esp32_audio_levels(self, *, now: float) -> None:
+        if (now - self._esp32_level_log_last_s) < 1.0:
+            return
+
+        left = self._esp32_by_role.get("left")
+        right = self._esp32_by_role.get("right")
+        left_fresh = left is not None and (now - left.last_seen_monotonic) < 1.0
+        right_fresh = right is not None and (now - right.last_seen_monotonic) < 1.0
+        if not left_fresh and not right_fresh:
+            return
+
+        self._esp32_level_log_last_s = now
+
+        def dbfs(rms: float) -> float:
+            return float(20.0 * np.log10(max(1e-8, float(rms))))
+
+        l_id = left.device_id if left_fresh and left else "offline"
+        r_id = right.device_id if right_fresh and right else "offline"
+        l_rms = float(left.last_rms) if left_fresh and left else 0.0
+        r_rms = float(right.last_rms) if right_fresh and right else 0.0
+
+        self._logger.info(
+            "ESP32 audio levels left(deviceId=%s rms=%.4f dbfs=%.1f) right(deviceId=%s rms=%.4f dbfs=%.1f)",
+            l_id,
+            l_rms,
+            dbfs(l_rms) if l_rms > 0.0 else -120.0,
+            r_id,
+            r_rms,
+            dbfs(r_rms) if r_rms > 0.0 else -120.0,
         )
 
     def _wrap_deg(self, deg: float) -> float:
