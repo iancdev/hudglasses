@@ -1,11 +1,13 @@
 package dev.iancdev.hudglasses
 
+import android.media.MediaRecorder
+
 data class HudState(
     val serverUrl: String = "ws://10.19.130.231:8765",
     val eventsConnected: Boolean = false,
     val sttConnected: Boolean = false,
     val phoneAudioFallbackEnabled: Boolean = false,
-    val phoneMicSource: Int = -1, // -1 = auto
+    val phoneMicSource: Int = MediaRecorder.AudioSource.MIC, // -1 = auto
     val phoneMicActiveSource: Int? = null,
     val phoneMicChannels: Int = 0,
     val phoneMicRmsLeft: Float = 0f,

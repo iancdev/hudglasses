@@ -91,6 +91,10 @@ class HudServer:
         self._world_direction_deg: float | None = None
         self._latest_direction_payload: dict[str, Any] = {}
         self._direction_log_last_s: float = 0.0
+        self._direction_noise_floor: float = float(os.environ.get("DIRECTION_NOISE_FLOOR", "0.002"))
+        self._direction_gain_quad: float = float(os.environ.get("DIRECTION_GAIN_QUAD", "4.5"))
+        self._direction_gain_lr: float = float(os.environ.get("DIRECTION_GAIN_LR", "6.0"))
+        self._direction_gain_mono: float = float(os.environ.get("DIRECTION_GAIN_MONO", "6.0"))
 
         self._keywords: list[str] = []
         self._keyword_cooldown_s: float = float(os.environ.get("KEYWORD_COOLDOWN_S", "5"))
@@ -732,19 +736,24 @@ class HudServer:
                 y = w * ((fr + fl) - (br + bl))  # front-positive
                 raw_direction_deg = float(np.degrees(np.arctan2(x, y)))
                 total = fl + fr + bl + br
-                intensity = float(np.clip(total * 1.8, 0.0, 1.0))  # heuristic gain
+                total = max(0.0, float(total) - self._direction_noise_floor)
+                intensity = float(np.clip(total * self._direction_gain_quad, 0.0, 1.0))
                 source = "quad"
             elif has_front:
                 total = fl + fr + 1e-6
                 balance = (fr - fl) / total  # -1..+1
                 raw_direction_deg = float(np.clip(balance * 90.0, -90.0, 90.0))
-                intensity = float(np.clip(total * 2.5, 0.0, 1.0))
+                total = max(0.0, float(total) - self._direction_noise_floor)
+                intensity = float(np.clip(total * self._direction_gain_lr, 0.0, 1.0))
                 source = "front"
             elif has_back:
                 total = bl + br + 1e-6
                 balance = (br - bl) / total  # -1..+1
-                raw_direction_deg = float(np.clip(balance * 90.0, -90.0, 90.0))
-                intensity = float(np.clip(total * 2.5, 0.0, 1.0))
+                # Phone worn behind the neck: treat this as a "back" array.
+                # Map balance into a rear arc around 180deg: [-1..+1] -> [225..135].
+                raw_direction_deg = self._wrap_deg(180.0 - float(balance * 45.0))
+                total = max(0.0, float(total) - self._direction_noise_floor)
+                intensity = float(np.clip(total * self._direction_gain_lr, 0.0, 1.0))
                 source = "back"
             else:
                 # Last resort: use whichever single mic is available (no direction, intensity only).
@@ -753,7 +762,8 @@ class HudServer:
                     continue
                 raw_direction_deg = 0.0
                 one_rms = float(getattr(one, "last_rms", 0.0))
-                intensity = float(np.clip(max(0.0, one_rms) * 2.5, 0.0, 1.0))
+                one_rms = max(0.0, one_rms - self._direction_noise_floor)
+                intensity = float(np.clip(one_rms * self._direction_gain_mono, 0.0, 1.0))
                 source = "mono"
 
             if raw_direction_deg is None or intensity is None or source is None:
