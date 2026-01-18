@@ -37,8 +37,6 @@ data class HudState(
     val hybridBackGain: Float = 1f,
     val esp32GainLeft: Float = 1f,
     val esp32GainRight: Float = 1f,
-    val androidGainLeft: Float = 1f,
-    val androidGainRight: Float = 1f,
     val glassesConnected: Boolean = false,
     val serverStatus: String = "",
     val sttStatus: String = "",

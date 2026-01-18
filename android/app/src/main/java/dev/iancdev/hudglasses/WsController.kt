@@ -261,8 +261,6 @@ class WsController(
         val hybridBackGain = directionConfig?.optDouble("hybridBackGain", Double.NaN)?.toFloat()
         val esp32GainLeft = directionConfig?.optDouble("esp32GainLeft", Double.NaN)?.toFloat()
         val esp32GainRight = directionConfig?.optDouble("esp32GainRight", Double.NaN)?.toFloat()
-        val androidGainLeft = directionConfig?.optDouble("androidGainLeft", Double.NaN)?.toFloat()
-        val androidGainRight = directionConfig?.optDouble("androidGainRight", Double.NaN)?.toFloat()
         HudStore.update {
             it.copy(
                 serverStatus = obj.optString("server", it.serverStatus),
@@ -276,8 +274,6 @@ class WsController(
                 hybridBackGain = hybridBackGain?.takeIf { it.isFinite() } ?: it.hybridBackGain,
                 esp32GainLeft = esp32GainLeft?.takeIf { it.isFinite() } ?: it.esp32GainLeft,
                 esp32GainRight = esp32GainRight?.takeIf { it.isFinite() } ?: it.esp32GainRight,
-                androidGainLeft = androidGainLeft?.takeIf { it.isFinite() } ?: it.androidGainLeft,
-                androidGainRight = androidGainRight?.takeIf { it.isFinite() } ?: it.androidGainRight,
                 fireAlarm = if (fireActive || sirenActive) "active" else "idle",
                 carHorn = if (hornActive) "active" else "idle",
                 siren = if (sirenActive) "active" else "idle",

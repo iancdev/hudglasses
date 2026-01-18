@@ -189,7 +189,7 @@ class RemoteActivity : ComponentActivity() {
                                     .put("keywords", JSONArray(keywords))
                             )
                         },
-                        onApplyDirectionTuning = { frontBackGain, frontGain, backGain, esp32GainLeft, esp32GainRight, androidGainLeft, androidGainRight ->
+                        onApplyDirectionTuning = { frontBackGain, frontGain, backGain, esp32GainLeft, esp32GainRight ->
                             wsController.sendOnEventsChannel(
                                 JSONObject()
                                     .put("type", "config.update")
@@ -198,8 +198,6 @@ class RemoteActivity : ComponentActivity() {
                                     .put("hybridBackGain", backGain)
                                     .put("esp32GainLeft", esp32GainLeft)
                                     .put("esp32GainRight", esp32GainRight)
-                                    .put("androidGainLeft", androidGainLeft)
-                                    .put("androidGainRight", androidGainRight)
                             )
                         },
                     )
@@ -368,7 +366,7 @@ private fun RemoteUi(
     onApplyVitureHudDefaults: () -> Unit,
     onApplyThresholds: (Float, Float, Float) -> Unit,
     onApplyKeywords: (String, Float) -> Unit,
-    onApplyDirectionTuning: (Float, Float, Float, Float, Float, Float, Float) -> Unit,
+    onApplyDirectionTuning: (Float, Float, Float, Float, Float) -> Unit,
 ) {
     val state by HudStore.state.collectAsState()
     var url by remember(state.serverUrl) { mutableStateOf(state.serverUrl) }
@@ -590,8 +588,6 @@ private fun RemoteUi(
             hybridBackGain = state.hybridBackGain,
             esp32GainLeft = state.esp32GainLeft,
             esp32GainRight = state.esp32GainRight,
-            androidGainLeft = state.androidGainLeft,
-            androidGainRight = state.androidGainRight,
             onApply = onApplyDirectionTuning,
         )
     }
@@ -673,17 +669,13 @@ private fun DirectionTuningSliders(
     hybridBackGain: Float,
     esp32GainLeft: Float,
     esp32GainRight: Float,
-    androidGainLeft: Float,
-    androidGainRight: Float,
-    onApply: (Float, Float, Float, Float, Float, Float, Float) -> Unit,
+    onApply: (Float, Float, Float, Float, Float) -> Unit,
 ) {
     var fbGain by remember(hybridFrontBackGain) { mutableStateOf(hybridFrontBackGain) }
     var frontGain by remember(hybridFrontGain) { mutableStateOf(hybridFrontGain) }
     var backGain by remember(hybridBackGain) { mutableStateOf(hybridBackGain) }
     var gLeft by remember(esp32GainLeft) { mutableStateOf(esp32GainLeft) }
     var gRight by remember(esp32GainRight) { mutableStateOf(esp32GainRight) }
-    var aLeft by remember(androidGainLeft) { mutableStateOf(androidGainLeft) }
-    var aRight by remember(androidGainRight) { mutableStateOf(androidGainRight) }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Tuning (live)", fontWeight = FontWeight.SemiBold)
@@ -693,49 +685,35 @@ private fun DirectionTuningSliders(
             value = fbGain,
             range = 0f..3f,
             onValueChange = { fbGain = it },
-            onFinished = { onApply(fbGain, frontGain, backGain, gLeft, gRight, aLeft, aRight) },
+            onFinished = { onApply(fbGain, frontGain, backGain, gLeft, gRight) },
         )
         SliderRow(
             label = "Front weight (HYBRID_FRONT_GAIN)",
             value = frontGain,
             range = 0f..3f,
             onValueChange = { frontGain = it },
-            onFinished = { onApply(fbGain, frontGain, backGain, gLeft, gRight, aLeft, aRight) },
+            onFinished = { onApply(fbGain, frontGain, backGain, gLeft, gRight) },
         )
         SliderRow(
             label = "Back weight (HYBRID_BACK_GAIN)",
             value = backGain,
             range = 0f..3f,
             onValueChange = { backGain = it },
-            onFinished = { onApply(fbGain, frontGain, backGain, gLeft, gRight, aLeft, aRight) },
+            onFinished = { onApply(fbGain, frontGain, backGain, gLeft, gRight) },
         )
         SliderRow(
             label = "ESP32 gain left (ESP32_GAIN_LEFT)",
             value = gLeft,
             range = 0f..3f,
             onValueChange = { gLeft = it },
-            onFinished = { onApply(fbGain, frontGain, backGain, gLeft, gRight, aLeft, aRight) },
+            onFinished = { onApply(fbGain, frontGain, backGain, gLeft, gRight) },
         )
         SliderRow(
             label = "ESP32 gain right (ESP32_GAIN_RIGHT)",
             value = gRight,
             range = 0f..3f,
             onValueChange = { gRight = it },
-            onFinished = { onApply(fbGain, frontGain, backGain, gLeft, gRight, aLeft, aRight) },
-        )
-        SliderRow(
-            label = "Android mic gain left (ANDROID_GAIN_LEFT)",
-            value = aLeft,
-            range = 0f..3f,
-            onValueChange = { aLeft = it },
-            onFinished = { onApply(fbGain, frontGain, backGain, gLeft, gRight, aLeft, aRight) },
-        )
-        SliderRow(
-            label = "Android mic gain right (ANDROID_GAIN_RIGHT)",
-            value = aRight,
-            range = 0f..3f,
-            onValueChange = { aRight = it },
-            onFinished = { onApply(fbGain, frontGain, backGain, gLeft, gRight, aLeft, aRight) },
+            onFinished = { onApply(fbGain, frontGain, backGain, gLeft, gRight) },
         )
     }
 }
