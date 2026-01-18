@@ -22,7 +22,7 @@ class ExternalHapticsClient:
         name: str,
         url: str,
         payload_format: str = "csv",
-        open_timeout_s: float = 8.0,
+        open_timeout_s: float = 15.0,
         max_queue: int = 100,
         logger: logging.Logger | None = None,
     ) -> None:
