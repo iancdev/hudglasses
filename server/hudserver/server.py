@@ -2133,16 +2133,20 @@ class HudServer:
             return
         now = asyncio.get_running_loop().time()
         for kw in self._keywords:
-            if kw not in normalized:
+            # Case-insensitive match. Don't assume keywords were pre-normalized.
+            kw_norm = " ".join(str(kw).lower().split())
+            if not kw_norm:
                 continue
-            last = self._keyword_last_hit.get(kw, 0.0)
+            if kw_norm not in normalized:
+                continue
+            last = self._keyword_last_hit.get(kw_norm, 0.0)
             if (now - last) < self._keyword_cooldown_s:
                 continue
-            self._keyword_last_hit[kw] = now
+            self._keyword_last_hit[kw_norm] = now
             await self._broadcast_events(
                 {
                     "type": "alert.keyword",
-                    "keyword": kw,
+                    "keyword": kw_norm,
                     "text": normalized,
                     **self._current_direction_payload(),
                 }
