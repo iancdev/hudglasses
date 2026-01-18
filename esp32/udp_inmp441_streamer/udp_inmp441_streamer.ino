@@ -6,7 +6,7 @@
 // ========= Project settings (edit these) =========
 static const char* WIFI_SSID = "nwHacks2026";
 static const char* WIFI_PASSWORD = "nw_Hacks_2026";
-static const char* LAPTOP_IP = "10.19.134.79";
+static const char* LAPTOP_IP = "10.19.130.231";
 
 // Flash TWO boards with different values:
 // - Left:  ROLE="left",  DEVICE_ID="esp32-left-01",  UDP_PORT=12345
