@@ -297,12 +297,26 @@ class HudServer:
 
                 state.last_seen_monotonic = asyncio.get_running_loop().time()
 
+                # Auto-detect mono vs stereo if the client didn't (or couldn't) send a valid audio.hello.
+                # For 16kHz/20ms PCM16:
+                # - mono is 640 bytes
+                # - stereo is 1280 bytes
+                if state.channels == 1 and len(msg) == state.mono_bytes_per_frame * 2:
+                    state.channels = 2
+                    state.bytes_per_frame = state.mono_bytes_per_frame * 2
+                    self._logger.info("Android mic %s detected stereo frames; switching channels=2", state.device_id)
+                elif state.channels == 2 and len(msg) == state.mono_bytes_per_frame:
+                    state.channels = 1
+                    state.bytes_per_frame = state.mono_bytes_per_frame
+                    self._logger.info("Android mic %s detected mono frames; switching channels=1", state.device_id)
+
                 if len(msg) != state.bytes_per_frame:
                     self._logger.debug(
-                        "Android mic %s unexpected frame size=%d expected=%d",
+                        "Android mic %s unexpected frame size=%d expected=%d channels=%d",
                         state.device_id,
                         len(msg),
                         state.bytes_per_frame,
+                        state.channels,
                     )
 
                 frame_in = bytes(msg)
