@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.LifecycleOwner
@@ -135,24 +136,22 @@ private fun Radar(state: HudState) {
 
 @Composable
 private fun Subtitles(state: HudState) {
-    val text = buildString {
-        if (state.subtitleLines.isNotEmpty()) {
-            append(state.subtitleLines.takeLast(2).joinToString("\n"))
-            append("\n")
-        }
-        append(state.subtitlePartial)
-    }.trim()
+    val text = state.subtitlePartial.trim()
 
     if (text.isBlank()) return
 
     Box(modifier = Modifier.fillMaxSize().padding(24.dp)) {
-        Text(
-            text = text,
-            color = Color.White,
-            style = MaterialTheme.typography.headlineSmall,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter),
-        )
+        Box(modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter).background(Color(0xA0000000)).padding(12.dp)) {
+            Text(
+                text = text,
+                color = Color.White,
+                style = MaterialTheme.typography.titleLarge,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
     }
 }
 

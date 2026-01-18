@@ -23,6 +23,7 @@ class WsController(
     private val scheduler = Executors.newSingleThreadScheduledExecutor()
     private var reconnectFuture: ScheduledFuture<*>? = null
     private var keywordClearFuture: ScheduledFuture<*>? = null
+    private var subtitleClearFuture: ScheduledFuture<*>? = null
     private var reconnectAttempts: Int = 0
     @Volatile private var shouldConnect: Boolean = false
     @Volatile private var targetBaseUrl: String? = null
@@ -47,6 +48,7 @@ class WsController(
         reconnectAttempts = 0
         reconnectFuture?.cancel(false)
         keywordClearFuture?.cancel(false)
+        subtitleClearFuture?.cancel(false)
         closeSockets()
         HudStore.update { it.copy(eventsConnected = false, sttConnected = false) }
     }
@@ -205,19 +207,35 @@ class WsController(
                 HudStore.update { it.copy(sttStatus = "error", sttError = msg) }
             }
             "partial" -> {
-                HudStore.update { it.copy(subtitlePartial = obj.optString("text")) }
+                updateSubtitle(obj.optString("text"))
             }
             "final" -> {
-                val line = obj.optString("text")
-                HudStore.update {
-                    it.copy(
-                        subtitlePartial = "",
-                        subtitleLines = (it.subtitleLines + line).takeLast(30),
-                    )
-                }
+                // Keep subtitles realtime and lightweight: final just updates the current subtitle text.
+                updateSubtitle(obj.optString("text"))
             }
         }
         onEvents(HudEvent.SttMessage(obj))
+    }
+
+    private fun updateSubtitle(raw: String) {
+        val text = trimSubtitle(raw)
+        HudStore.update { it.copy(subtitlePartial = text, subtitleLines = emptyList()) }
+        subtitleClearFuture?.cancel(false)
+        if (text.isNotBlank()) {
+            subtitleClearFuture = scheduler.schedule(
+                { HudStore.update { it.copy(subtitlePartial = "", subtitleLines = emptyList()) } },
+                2,
+                TimeUnit.SECONDS,
+            )
+        }
+    }
+
+    private fun trimSubtitle(raw: String, maxWords: Int = 18): String {
+        val cleaned = raw.replace('\n', ' ').trim()
+        if (cleaned.isBlank()) return ""
+        val parts = cleaned.split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (parts.size <= maxWords) return cleaned
+        return parts.takeLast(maxWords).joinToString(" ")
     }
 
     private fun handleStatus(obj: JSONObject) {

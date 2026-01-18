@@ -680,48 +680,65 @@ class HudServer:
             now = asyncio.get_running_loop().time()
 
             source: str | None = None
-            l = 0.0
-            r = 0.0
+            raw_direction_deg: float | None = None
+            intensity: float | None = None
 
-            # Prefer ESP32 directional audio if both sides are present.
-            left = self._esp32_by_role.get("left")
-            right = self._esp32_by_role.get("right")
-            if (
-                left
-                and right
-                and (now - left.last_seen_monotonic) < 1.0
-                and (now - right.last_seen_monotonic) < 1.0
-            ):
-                source = "esp32"
-                l = max(0.0, left.last_rms)
-                r = max(0.0, right.last_rms)
+            # ESP32: front-left / front-right
+            front_left = self._esp32_by_role.get("left")
+            front_right = self._esp32_by_role.get("right")
+            has_front = (
+                front_left
+                and front_right
+                and (now - front_left.last_seen_monotonic) < 1.0
+                and (now - front_right.last_seen_monotonic) < 1.0
+            )
+            fl = max(0.0, front_left.last_rms) if has_front and front_left else 0.0
+            fr = max(0.0, front_right.last_rms) if has_front and front_right else 0.0
 
-            # Fallback to Android phone mic (stereo preferred, mono supported).
-            if source is None and self._android_mic_by_conn:
+            # Android phone: back-left / back-right (requires stereo to be meaningful).
+            mic = None
+            if self._android_mic_by_conn:
                 mic = max(self._android_mic_by_conn.values(), key=lambda s: s.last_seen_monotonic)
-                if (now - mic.last_seen_monotonic) < 1.0:
-                    source = "android_mic"
-                    if mic.channels == 2:
-                        l = max(0.0, mic.last_rms_left)
-                        r = max(0.0, mic.last_rms_right)
-                    else:
-                        l = max(0.0, mic.last_rms)
-                        r = max(0.0, mic.last_rms)
+                if (now - mic.last_seen_monotonic) >= 1.0:
+                    mic = None
+            has_back = mic is not None and mic.channels == 2
+            bl = max(0.0, mic.last_rms_left) if has_back and mic else 0.0
+            br = max(0.0, mic.last_rms_right) if has_back and mic else 0.0
 
-            # Last resort: one-sided ESP32 (no direction, intensity only).
-            if source is None:
-                one = left or right
+            if has_front and has_back:
+                # 4-mic spatial estimate (front-left/front-right + back-left/back-right).
+                # Map each mic to a quadrant and take a weighted vector sum.
+                w = 0.70710678  # sin/cos(45deg)
+                x = w * ((fr - fl) + (br - bl))  # right-positive
+                y = w * ((fr + fl) - (br + bl))  # front-positive
+                raw_direction_deg = float(np.degrees(np.arctan2(x, y)))
+                total = fl + fr + bl + br
+                intensity = float(np.clip(total * 1.8, 0.0, 1.0))  # heuristic gain
+                source = "quad"
+            elif has_front:
+                total = fl + fr + 1e-6
+                balance = (fr - fl) / total  # -1..+1
+                raw_direction_deg = float(np.clip(balance * 90.0, -90.0, 90.0))
+                intensity = float(np.clip(total * 2.5, 0.0, 1.0))
+                source = "front"
+            elif has_back:
+                total = bl + br + 1e-6
+                balance = (br - bl) / total  # -1..+1
+                raw_direction_deg = float(np.clip(balance * 90.0, -90.0, 90.0))
+                intensity = float(np.clip(total * 2.5, 0.0, 1.0))
+                source = "back"
+            else:
+                # Last resort: use whichever single mic is available (no direction, intensity only).
+                one = (front_left or front_right) or mic
                 if one is None:
                     continue
-                source = "esp32_mono"
-                l = max(0.0, one.last_rms)
-                r = l
+                raw_direction_deg = 0.0
+                one_rms = float(getattr(one, "last_rms", 0.0))
+                intensity = float(np.clip(max(0.0, one_rms) * 2.5, 0.0, 1.0))
+                source = "mono"
 
-            total = l + r + 1e-6
-            balance = (r - l) / total  # -1..+1
-
-            raw_direction_deg = float(np.clip(balance * 90.0, -90.0, 90.0))
-            intensity = float(np.clip(total * 2.5, 0.0, 1.0))  # heuristic gain
+            if raw_direction_deg is None or intensity is None or source is None:
+                continue
 
             direction_deg = self._stabilize_direction(raw_direction_deg)
             ui = self._direction_to_ui(direction_deg, intensity)
@@ -872,12 +889,14 @@ class HudServer:
         radar_x = float(np.sin(theta) * radius)
         radar_y = float(np.cos(theta) * radius)
 
-        if direction_deg < -20:
-            glow_edge = "left"
-        elif direction_deg > 20:
-            glow_edge = "right"
-        else:
+        if -45.0 <= direction_deg <= 45.0:
             glow_edge = "top"
+        elif 45.0 < direction_deg < 135.0:
+            glow_edge = "right"
+        elif -135.0 < direction_deg < -45.0:
+            glow_edge = "left"
+        else:
+            glow_edge = "bottom"
 
         return {
             "radarX": radar_x,
