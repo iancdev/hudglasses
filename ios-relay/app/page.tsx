@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-const DEFAULT_SERVER_IP = "10.19.130.231";
+const DEFAULT_SERVER_IP = "192.168.154.10";
 const DEFAULT_SERVER_PORT = 8765;
 
 type RelayStatus =

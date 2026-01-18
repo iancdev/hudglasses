@@ -286,11 +286,11 @@ class HudServer:
         # Defaults to ON for hackathon convenience.
         self._external_haptics_enabled: bool = _parse_bool(os.environ.get("EXTERNAL_HAPTICS"), default=True)
         self._external_haptics_left_url: str = _ensure_ws_port(
-            (os.environ.get("EXTERNAL_HAPTICS_LEFT_URL") or "ws://10.19.129.145:81").strip(),
+            (os.environ.get("EXTERNAL_HAPTICS_LEFT_URL") or "ws://192.168.154.226:81").strip(),
             81,
         )
         self._external_haptics_right_url: str = _ensure_ws_port(
-            (os.environ.get("EXTERNAL_HAPTICS_RIGHT_URL") or "ws://10.19.130.147:81").strip(),
+            (os.environ.get("EXTERNAL_HAPTICS_RIGHT_URL") or "ws://192.168.154.105:81").strip(),
             81,
         )
         self._external_haptics_format: str = (os.environ.get("EXTERNAL_HAPTICS_FORMAT") or "csv").strip().lower()

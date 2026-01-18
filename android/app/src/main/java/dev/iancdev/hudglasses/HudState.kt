@@ -11,7 +11,7 @@ data class RadarDot(
 )
 
 data class HudState(
-    val serverUrl: String = "ws://10.19.130.231:8765",
+    val serverUrl: String = "ws://192.168.154.10:8765",
     val eventsConnected: Boolean = false,
     val sttConnected: Boolean = false,
     val phoneAudioFallbackEnabled: Boolean = false,
