@@ -3,7 +3,7 @@
 This is the **laptop “brain”** server. It:
 - accepts **ESP32 audio streams** (left/right),
 - derives **direction + intensity**,
-- runs **danger sound detection** (fire alarm, car horn),
+- runs **danger sound detection** (fire alarm, car horn, siren),
 - streams audio to **ElevenLabs Realtime STT** and forwards transcripts,
 - broadcasts **HUD events** to the Android client.
 
@@ -17,6 +17,20 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+### Alarm detection (YAMNet)
+This repo includes `resources/yamnet.h5` and `resources/yamnet_class_map.csv`. On macOS arm64, `pip install -r requirements.txt` will also install TensorFlow + `tf-keras` (legacy Keras 2 API) so the server can construct the YAMNet graph and load the weights-only `.h5` file.
+
+Config:
+- `ALARM_DETECTOR=yamnet` (default when the model files are present)
+- `ALARM_DETECTOR=heuristic` (use the legacy band-power heuristics)
+- `ALARM_DETECTOR=off` (disable alarms)
+
+Tuning (YAMNet):
+- `YAMNET_FIRE_THRESHOLD` (default `0.25`)
+- `YAMNET_HORN_THRESHOLD` (default `0.25`)
+- `YAMNET_SIREN_THRESHOLD` (default `0.25`)
+- `YAMNET_MIN_RMS` (default `0.008`)
 
 ## Run
 ```bash

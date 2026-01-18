@@ -210,7 +210,44 @@ class HudServer:
             "yes",
             "on",
         )
-        self._reset_alarm_state_on_connect: bool = not self._enable_heuristic_alarms
+        # Alarm detection:
+        # - legacy env: ENABLE_HEURISTIC_ALARMS=1 enables the lightweight band heuristics
+        # - new env: ALARM_DETECTOR=yamnet|heuristic|off|auto
+        repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        default_yamnet_model = os.path.join(repo_root, "resources", "yamnet.h5")
+        default_yamnet_class_map = os.path.join(repo_root, "resources", "yamnet_class_map.csv")
+        yamnet_available = os.path.exists(default_yamnet_model) and os.path.exists(default_yamnet_class_map)
+        default_alarm_detector = (
+            "heuristic" if self._enable_heuristic_alarms else ("yamnet" if yamnet_available else "off")
+        )
+        self._alarm_detector: str = (os.environ.get("ALARM_DETECTOR") or default_alarm_detector).strip().lower()
+
+        self._yamnet_model_path: str = (os.environ.get("YAMNET_MODEL_PATH") or default_yamnet_model).strip()
+        self._yamnet_class_map_path: str = (os.environ.get("YAMNET_CLASS_MAP_PATH") or default_yamnet_class_map).strip()
+        self._yamnet_window_s: float = float(os.environ.get("YAMNET_WINDOW_S", "1.0"))
+        self._yamnet_hop_s: float = float(os.environ.get("YAMNET_HOP_S", "0.2"))
+        self._yamnet_min_rms: float = float(os.environ.get("YAMNET_MIN_RMS", "0.008"))
+        self._yamnet_fire_threshold: float = float(os.environ.get("YAMNET_FIRE_THRESHOLD", "0.25"))
+        self._yamnet_horn_threshold: float = float(os.environ.get("YAMNET_HORN_THRESHOLD", "0.25"))
+        self._yamnet_siren_threshold: float = float(os.environ.get("YAMNET_SIREN_THRESHOLD", "0.25"))
+        self._yamnet_fire_hold_s: float = float(os.environ.get("YAMNET_FIRE_HOLD_S", "10.0"))
+        self._yamnet_horn_hold_s: float = float(os.environ.get("YAMNET_HORN_HOLD_S", "2.0"))
+        self._yamnet_siren_hold_s: float = float(os.environ.get("YAMNET_SIREN_HOLD_S", "3.0"))
+        self._yamnet_topk: int = int(os.environ.get("YAMNET_TOPK", "5"))
+
+        self._alarm_fire_active: bool = False
+        self._alarm_horn_active: bool = False
+        self._alarm_siren_active: bool = False
+        self._alarm_fire_confidence: float = 0.0
+        self._alarm_horn_confidence: float = 0.0
+        self._alarm_siren_confidence: float = 0.0
+        self._yamnet_last_fire_score: float = 0.0
+        self._yamnet_last_horn_score: float = 0.0
+        self._yamnet_last_siren_score: float = 0.0
+        self._yamnet_last_top: list[tuple[str, float]] = []
+
+        # If alarms are disabled, make sure connected clients don't remain "stuck" in a previous active state.
+        self._reset_alarm_state_on_connect: bool = self._alarm_detector in ("0", "off", "none", "disabled")
 
         self._stop = asyncio.Event()
 
@@ -278,10 +315,13 @@ class HudServer:
         status_task = asyncio.create_task(self._status_loop(), name="status_loop")
         direction_task = asyncio.create_task(self._direction_loop(), name="direction_loop")
         alarms_task: asyncio.Task[None] | None = None
-        if self._enable_heuristic_alarms:
+        det = (self._alarm_detector or "").strip().lower()
+        if det in ("yamnet", "auto"):
+            alarms_task = asyncio.create_task(self._yamnet_alarms_loop(), name="yamnet_alarms_loop")
+        elif det in ("heuristic", "heuristics"):
             alarms_task = asyncio.create_task(self._alarms_loop(), name="alarms_loop")
         else:
-            self._logger.info("Heuristic alarms disabled (set ENABLE_HEURISTIC_ALARMS=1 to enable)")
+            self._logger.info("Alarm detection disabled (set ALARM_DETECTOR=yamnet or heuristic)")
         try:
             async with websockets.serve(self._route, self._host, self._port, max_size=2 * 1024 * 1024):
                 await self._stop.wait()
@@ -332,6 +372,7 @@ class HudServer:
                 # remain "stuck" in a previous active state.
                 await conn.send(dumps({"type": "alarm.fire", "state": "ended", **self._current_direction_payload()}))
                 await conn.send(dumps({"type": "alarm.car_horn", "state": "ended", **self._current_direction_payload()}))
+                await conn.send(dumps({"type": "alarm.siren", "state": "ended", **self._current_direction_payload()}))
             async for msg in conn:
                 if not isinstance(msg, str):
                     continue
@@ -413,6 +454,12 @@ class HudServer:
                         self._esp32_gain_right = float(obj.get("esp32GainRight"))
                     self._esp32_gain_left = max(0.0, float(self._esp32_gain_left))
                     self._esp32_gain_right = max(0.0, float(self._esp32_gain_right))
+                    if obj.get("yamnetFireThreshold") is not None:
+                        self._yamnet_fire_threshold = float(obj.get("yamnetFireThreshold"))
+                    if obj.get("yamnetHornThreshold") is not None:
+                        self._yamnet_horn_threshold = float(obj.get("yamnetHornThreshold"))
+                    if obj.get("yamnetMinRms") is not None:
+                        self._yamnet_min_rms = float(obj.get("yamnetMinRms"))
                     kws = obj.get("keywords")
                     if isinstance(kws, list):
                         cleaned: list[str] = []
@@ -881,6 +928,23 @@ class HudServer:
             "esp32": esp32,
             "androidMic": android_mic,
             "sttAudioSource": self._stt_audio_source,
+            "alarms": {
+                "detector": self._alarm_detector,
+                "fireActive": self._alarm_fire_active,
+                "carHornActive": self._alarm_horn_active,
+                "sirenActive": self._alarm_siren_active,
+                "fireConfidence": self._alarm_fire_confidence,
+                "carHornConfidence": self._alarm_horn_confidence,
+                "sirenConfidence": self._alarm_siren_confidence,
+                "yamnetFireScore": self._yamnet_last_fire_score,
+                "yamnetHornScore": self._yamnet_last_horn_score,
+                "yamnetSirenScore": self._yamnet_last_siren_score,
+                "yamnetFireThreshold": self._yamnet_fire_threshold,
+                "yamnetHornThreshold": self._yamnet_horn_threshold,
+                "yamnetSirenThreshold": self._yamnet_siren_threshold,
+                "yamnetMinRms": self._yamnet_min_rms,
+                "yamnetTop": [{"label": n, "score": float(s)} for (n, s) in self._yamnet_last_top[:10]],
+            },
             "directionConfig": {
                 "quadFrontWeight": self._quad_front_weight,
                 "quadBackWeight": self._quad_back_weight,
@@ -1511,17 +1575,23 @@ class HudServer:
 
             if fire_should_be_active and not fire_active:
                 fire_active = True
+                self._alarm_fire_active = True
+                self._alarm_fire_confidence = fire_last_confidence
                 await self._broadcast_events(
                     {"type": "alarm.fire", "state": "started", "confidence": fire_last_confidence, **self._current_direction_payload()}
                 )
             if fire_active and not fire_should_be_active:
                 fire_active = False
+                self._alarm_fire_active = False
+                self._alarm_fire_confidence = 0.0
                 await self._broadcast_events(
                     {"type": "alarm.fire", "state": "ended", "confidence": 0.0, **self._current_direction_payload()}
                 )
 
             if horn_should_be_active and not horn_active:
                 horn_active = True
+                self._alarm_horn_active = True
+                self._alarm_horn_confidence = horn_last_confidence
                 await self._broadcast_events(
                     {
                         "type": "alarm.car_horn",
@@ -1532,8 +1602,212 @@ class HudServer:
                 )
             if horn_active and not horn_should_be_active:
                 horn_active = False
+                self._alarm_horn_active = False
+                self._alarm_horn_confidence = 0.0
                 await self._broadcast_events(
                     {"type": "alarm.car_horn", "state": "ended", "confidence": 0.0, **self._current_direction_payload()}
+                )
+
+    async def _yamnet_alarms_loop(self) -> None:
+        """Realtime YAMNet-based horn/fire detection from the live audio stream."""
+        sample_rate_hz = 16000
+        window_s = float(np.clip(self._yamnet_window_s, 0.25, 4.0))
+        hop_s = float(np.clip(self._yamnet_hop_s, 0.05, 1.0))
+        min_rms = float(max(0.0, self._yamnet_min_rms))
+        window_samples = int(sample_rate_hz * window_s)
+
+        try:
+            from hudserver.yamnet_detector import YamnetDetector
+
+            detector = YamnetDetector(
+                model_path=self._yamnet_model_path,
+                class_map_path=self._yamnet_class_map_path,
+                sample_rate_hz=sample_rate_hz,
+                topk=int(self._yamnet_topk),
+            )
+            detector.load()
+        except Exception:
+            self._logger.exception(
+                "YAMNet alarms: failed to load (model=%s classMap=%s).",
+                self._yamnet_model_path,
+                self._yamnet_class_map_path,
+            )
+            if (self._alarm_detector or "").strip().lower() == "auto" and self._enable_heuristic_alarms:
+                self._logger.info("YAMNet alarms: falling back to heuristic alarms (ENABLE_HEURISTIC_ALARMS=1).")
+                await self._alarms_loop()
+            while True:
+                await asyncio.sleep(10.0)
+
+        self._logger.info(
+            "YAMNet alarms enabled model=%s window=%.2fs hop=%.2fs fireTh=%.2f hornTh=%.2f sirenTh=%.2f",
+            self._yamnet_model_path,
+            window_s,
+            hop_s,
+            self._yamnet_fire_threshold,
+            self._yamnet_horn_threshold,
+            self._yamnet_siren_threshold,
+        )
+
+        buf = np.zeros((0,), dtype=np.float32)
+        loop = asyncio.get_running_loop()
+        next_eval = loop.time()
+
+        fire_last_positive = 0.0
+        fire_active = False
+        fire_last_confidence = 0.0
+
+        horn_last_positive = 0.0
+        horn_active = False
+        horn_last_confidence = 0.0
+
+        siren_last_positive = 0.0
+        siren_active = False
+        siren_last_confidence = 0.0
+
+        active_role = "left"
+        while True:
+            # Choose an analysis source (stickiness + fallback to avoid blocking).
+            left = self._esp32_by_role.get("left")
+            right = self._esp32_by_role.get("right")
+            android_mic = None
+            if self._android_mic_by_conn:
+                android_mic = max(self._android_mic_by_conn.values(), key=lambda s: s.last_seen_monotonic)
+                if (loop.time() - android_mic.last_seen_monotonic) > 1.0:
+                    android_mic = None
+
+            if not left and not right and android_mic is None:
+                await asyncio.sleep(0.05)
+                continue
+            if left and right:
+                if active_role == "left" and right.last_rms > left.last_rms * 1.5:
+                    active_role = "right"
+                elif active_role == "right" and left.last_rms > right.last_rms * 1.5:
+                    active_role = "left"
+
+            preferred = self._esp32_by_role.get(active_role)
+            fallback = self._esp32_by_role.get("right" if active_role == "left" else "left")
+
+            frame_bytes: bytes | None = None
+            for state in (preferred, fallback):
+                if state is None:
+                    continue
+                try:
+                    frame_bytes = await asyncio.wait_for(state.analysis_q.get(), timeout=0.25)
+                    break
+                except asyncio.TimeoutError:
+                    continue
+            if frame_bytes is None and android_mic is not None:
+                try:
+                    frame_bytes = await asyncio.wait_for(android_mic.analysis_q.get(), timeout=0.25)
+                except asyncio.TimeoutError:
+                    frame_bytes = None
+
+            if frame_bytes is None:
+                await asyncio.sleep(0.01)
+                continue
+
+            frame = pcm16le_bytes_to_float32(frame_bytes)
+            if frame.size == 0:
+                continue
+            buf = np.concatenate([buf, frame])
+            if buf.size > window_samples:
+                buf = buf[-window_samples:]
+
+            now = loop.time()
+            if now < next_eval:
+                continue
+            next_eval = now + hop_s
+            if buf.size < window_samples:
+                continue
+
+            window = buf[-window_samples:].copy()
+            total_rms = rms_value(window)
+            if total_rms < min_rms:
+                self._yamnet_last_fire_score = 0.0
+                self._yamnet_last_horn_score = 0.0
+                self._yamnet_last_siren_score = 0.0
+                self._yamnet_last_top = []
+            else:
+                scores = await asyncio.to_thread(detector.classify_window, window)
+                self._yamnet_last_fire_score = float(scores.fire_alarm)
+                self._yamnet_last_horn_score = float(scores.car_horn)
+                self._yamnet_last_siren_score = float(scores.siren)
+                self._yamnet_last_top = list(scores.top)
+
+            fire_detected = total_rms >= min_rms and self._yamnet_last_fire_score >= float(self._yamnet_fire_threshold)
+            horn_detected = total_rms >= min_rms and self._yamnet_last_horn_score >= float(self._yamnet_horn_threshold)
+            siren_detected = total_rms >= min_rms and self._yamnet_last_siren_score >= float(self._yamnet_siren_threshold)
+
+            if fire_detected:
+                fire_last_positive = now
+                fire_last_confidence = float(self._yamnet_last_fire_score)
+            if horn_detected:
+                horn_last_positive = now
+                horn_last_confidence = float(self._yamnet_last_horn_score)
+            if siren_detected:
+                siren_last_positive = now
+                siren_last_confidence = float(self._yamnet_last_siren_score)
+
+            fire_should_be_active = (now - fire_last_positive) < float(max(0.1, self._yamnet_fire_hold_s))
+            horn_should_be_active = (now - horn_last_positive) < float(max(0.1, self._yamnet_horn_hold_s))
+            siren_should_be_active = (now - siren_last_positive) < float(max(0.1, self._yamnet_siren_hold_s))
+
+            if fire_should_be_active and not fire_active:
+                fire_active = True
+                self._alarm_fire_active = True
+                self._alarm_fire_confidence = fire_last_confidence
+                self._logger.info("YAMNet fire alarm started confidence=%.2f top=%s", fire_last_confidence, self._yamnet_last_top[:3])
+                await self._broadcast_events(
+                    {"type": "alarm.fire", "state": "started", "confidence": fire_last_confidence, **self._current_direction_payload()}
+                )
+            if fire_active and not fire_should_be_active:
+                fire_active = False
+                self._alarm_fire_active = False
+                self._alarm_fire_confidence = 0.0
+                self._logger.info("YAMNet fire alarm ended")
+                await self._broadcast_events(
+                    {"type": "alarm.fire", "state": "ended", "confidence": 0.0, **self._current_direction_payload()}
+                )
+
+            if horn_should_be_active and not horn_active:
+                horn_active = True
+                self._alarm_horn_active = True
+                self._alarm_horn_confidence = horn_last_confidence
+                self._logger.info("YAMNet car horn started confidence=%.2f top=%s", horn_last_confidence, self._yamnet_last_top[:3])
+                await self._broadcast_events(
+                    {
+                        "type": "alarm.car_horn",
+                        "state": "started",
+                        "confidence": horn_last_confidence,
+                        **self._current_direction_payload(),
+                    }
+                )
+            if horn_active and not horn_should_be_active:
+                horn_active = False
+                self._alarm_horn_active = False
+                self._alarm_horn_confidence = 0.0
+                self._logger.info("YAMNet car horn ended")
+                await self._broadcast_events(
+                    {"type": "alarm.car_horn", "state": "ended", "confidence": 0.0, **self._current_direction_payload()}
+                )
+
+            if siren_should_be_active and not siren_active:
+                siren_active = True
+                self._alarm_siren_active = True
+                self._alarm_siren_confidence = siren_last_confidence
+                self._logger.info(
+                    "YAMNet siren started confidence=%.2f top=%s", siren_last_confidence, self._yamnet_last_top[:3]
+                )
+                await self._broadcast_events(
+                    {"type": "alarm.siren", "state": "started", "confidence": siren_last_confidence, **self._current_direction_payload()}
+                )
+            if siren_active and not siren_should_be_active:
+                siren_active = False
+                self._alarm_siren_active = False
+                self._alarm_siren_confidence = 0.0
+                self._logger.info("YAMNet siren ended")
+                await self._broadcast_events(
+                    {"type": "alarm.siren", "state": "ended", "confidence": 0.0, **self._current_direction_payload()}
                 )
 
     def _direction_to_ui(self, direction_deg: float, intensity: float) -> dict[str, Any]:
