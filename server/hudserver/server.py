@@ -1134,7 +1134,8 @@ class HudServer:
             api_key=api_key,
             host=(os.environ.get("ELEVENLABS_HOST") or "api.elevenlabs.io").strip(),
             model_id=(os.environ.get("ELEVENLABS_MODEL_ID") or None),
-            language_code=(os.environ.get("ELEVENLABS_LANGUAGE_CODE") or None),
+            # Hardcode English-only realtime STT to avoid accidental language auto-detection.
+            language_code="en",
             commit_strategy=(os.environ.get("ELEVENLABS_COMMIT_STRATEGY") or "vad"),
             vad_silence_threshold_secs=float(os.environ.get("ELEVENLABS_VAD_SILENCE_THRESHOLD_SECS") or "1.2"),
             include_timestamps=(os.environ.get("ELEVENLABS_INCLUDE_TIMESTAMPS") == "1"),
