@@ -5,6 +5,13 @@ data class HudState(
     val eventsConnected: Boolean = false,
     val sttConnected: Boolean = false,
     val phoneAudioFallbackEnabled: Boolean = false,
+    val phoneMicSource: Int = -1, // -1 = auto
+    val phoneMicActiveSource: Int? = null,
+    val phoneMicChannels: Int = 0,
+    val phoneMicRmsLeft: Float = 0f,
+    val phoneMicRmsRight: Float = 0f,
+    val phoneMicStereoDiffRatio: Float = 0f,
+    val phoneMicCorrelation: Float = 0f,
     val glassesConnected: Boolean = false,
     val serverStatus: String = "",
     val sttStatus: String = "",

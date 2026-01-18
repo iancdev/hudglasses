@@ -5,11 +5,13 @@ import android.content.Context
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.hardware.display.DisplayManager
+import android.media.MediaRecorder
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,6 +20,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -79,6 +83,18 @@ class RemoteActivity : ComponentActivity() {
         )
         phoneAudioStreamer = MicSttStreamer(
             onAudioFrame = { frame -> wsController.sendSttAudioFrame(frame) },
+            onStats = { stats ->
+                HudStore.update {
+                    it.copy(
+                        phoneMicActiveSource = stats.audioSource,
+                        phoneMicChannels = stats.channels,
+                        phoneMicRmsLeft = stats.rmsLeft,
+                        phoneMicRmsRight = stats.rmsRight,
+                        phoneMicStereoDiffRatio = stats.stereoDiffRatio,
+                        phoneMicCorrelation = stats.correlation,
+                    )
+                }
+            },
         )
         vitureImuController = VitureImuController(
             context = this,
@@ -106,6 +122,7 @@ class RemoteActivity : ComponentActivity() {
                         onConnect = { wsController.connect(HudStore.state.value.serverUrl) },
                         onDisconnect = { wsController.disconnect() },
                         onSetPhoneAudioFallbackEnabled = { enabled -> setPhoneAudioFallbackEnabled(enabled) },
+                        onSetPhoneMicSource = { source -> setPhoneMicSource(source) },
                         onSetVitureImu = { enabled -> vitureImuController.setImuEnabled(enabled) },
                         onSetViture3d = { enabled -> vitureImuController.set3dEnabled(enabled) },
                         onSetVitureImuFreq = { mode -> vitureImuController.setImuFrequency(mode) },
@@ -214,13 +231,26 @@ class RemoteActivity : ComponentActivity() {
         val frameMs = 20
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
 
-        val started = phoneAudioStreamer.start(sampleRateHz = sampleRateHz, frameMs = frameMs, preferStereo = true)
+        val preferredSource = HudStore.state.value.phoneMicSource.let { if (it == -1) null else it }
+        val started = phoneAudioStreamer.start(
+            sampleRateHz = sampleRateHz,
+            frameMs = frameMs,
+            preferStereo = true,
+            preferredAudioSource = preferredSource,
+        )
         if (started == null) {
             HudStore.update { it.copy(phoneAudioFallbackEnabled = false, sttError = "Failed to start phone mic") }
             requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             return
         }
-        HudStore.update { it.copy(phoneAudioFallbackEnabled = true, sttError = "") }
+        HudStore.update {
+            it.copy(
+                phoneAudioFallbackEnabled = true,
+                sttError = "",
+                phoneMicActiveSource = started.audioSource,
+                phoneMicChannels = started.channels,
+            )
+        }
 
         wsController.sendOnEventsChannel(
             JSONObject()
@@ -241,7 +271,17 @@ class RemoteActivity : ComponentActivity() {
                         .put("channels", started.channels)
                         .put("frameMs", started.frameMs),
                 )
+                .put("androidAudioSource", started.audioSource)
+                .put("androidChannelConfig", started.channelConfig)
         )
+    }
+
+    private fun setPhoneMicSource(source: Int) {
+        HudStore.update { it.copy(phoneMicSource = source) }
+        if (HudStore.state.value.phoneAudioFallbackEnabled) {
+            phoneAudioStreamer.stop()
+            enablePhoneAudioFallbackInternal()
+        }
     }
 
     private fun maybeRestorePhoneAudioFallback() {
@@ -259,6 +299,7 @@ private fun RemoteUi(
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onSetPhoneAudioFallbackEnabled: (Boolean) -> Unit,
+    onSetPhoneMicSource: (Int) -> Unit,
     onSetVitureImu: (Boolean) -> Unit,
     onSetViture3d: (Boolean) -> Unit,
     onSetVitureImuFreq: (Int) -> Unit,
@@ -288,6 +329,17 @@ private fun RemoteUi(
                 onCheckedChange = onSetPhoneAudioFallbackEnabled,
             )
         }
+
+        PhoneMicSourcePicker(
+            selected = state.phoneMicSource,
+            active = state.phoneMicActiveSource,
+            channels = state.phoneMicChannels,
+            rmsLeft = state.phoneMicRmsLeft,
+            rmsRight = state.phoneMicRmsRight,
+            stereoDiffRatio = state.phoneMicStereoDiffRatio,
+            correlation = state.phoneMicCorrelation,
+            onSelect = onSetPhoneMicSource,
+        )
 
         Text(
             "Viture: init=${vitureInitLabel(state.vitureInitResult)} " +
@@ -424,6 +476,80 @@ private fun RemoteUi(
         Text("Lines: ${state.subtitleLines.takeLast(3).joinToString(" | ")}")
 
         Text("Direction: ${"%.1f".format(state.directionDeg)}°  intensity=${"%.2f".format(state.intensity)}")
+    }
+}
+
+@Composable
+private fun PhoneMicSourcePicker(
+    selected: Int,
+    active: Int?,
+    channels: Int,
+    rmsLeft: Float,
+    rmsRight: Float,
+    stereoDiffRatio: Float,
+    correlation: Float,
+    onSelect: (Int) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val options = remember { phoneMicSourceOptions() }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Phone mic (try to enable real stereo)")
+
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Source")
+            Box {
+                Button(onClick = { expanded = true }) {
+                    Text(phoneMicSourceLabel(selected))
+                }
+                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    for (opt in options) {
+                        DropdownMenuItem(
+                            text = { Text(opt.label) },
+                            onClick = {
+                                expanded = false
+                                onSelect(opt.value)
+                            },
+                        )
+                    }
+                }
+            }
+            Text("Active: ${phoneMicSourceLabel(active)}")
+            Text("ch=$channels")
+        }
+
+        Text(
+            "L=${"%.3f".format(rmsLeft)} R=${"%.3f".format(rmsRight)} " +
+                "sep=${"%.3f".format(stereoDiffRatio)} corr=${"%.3f".format(correlation)}"
+        )
+    }
+}
+
+private data class MicSourceOption(val value: Int, val label: String)
+
+private fun phoneMicSourceOptions(): List<MicSourceOption> {
+    return listOf(
+        MicSourceOption(-1, "Auto"),
+        MicSourceOption(MediaRecorder.AudioSource.VOICE_RECOGNITION, "VOICE_RECOGNITION (${MediaRecorder.AudioSource.VOICE_RECOGNITION})"),
+        MicSourceOption(MediaRecorder.AudioSource.UNPROCESSED, "UNPROCESSED (${MediaRecorder.AudioSource.UNPROCESSED})"),
+        MicSourceOption(MediaRecorder.AudioSource.VOICE_COMMUNICATION, "VOICE_COMMUNICATION (${MediaRecorder.AudioSource.VOICE_COMMUNICATION})"),
+        MicSourceOption(MediaRecorder.AudioSource.MIC, "MIC (${MediaRecorder.AudioSource.MIC})"),
+        MicSourceOption(MediaRecorder.AudioSource.CAMCORDER, "CAMCORDER (${MediaRecorder.AudioSource.CAMCORDER})"),
+        MicSourceOption(MediaRecorder.AudioSource.DEFAULT, "DEFAULT (${MediaRecorder.AudioSource.DEFAULT})"),
+    )
+}
+
+private fun phoneMicSourceLabel(source: Int?): String {
+    if (source == null) return "n/a"
+    if (source == -1) return "Auto"
+    return when (source) {
+        MediaRecorder.AudioSource.VOICE_RECOGNITION -> "VOICE_RECOGNITION"
+        MediaRecorder.AudioSource.UNPROCESSED -> "UNPROCESSED"
+        MediaRecorder.AudioSource.VOICE_COMMUNICATION -> "VOICE_COMMUNICATION"
+        MediaRecorder.AudioSource.MIC -> "MIC"
+        MediaRecorder.AudioSource.CAMCORDER -> "CAMCORDER"
+        MediaRecorder.AudioSource.DEFAULT -> "DEFAULT"
+        else -> "src_$source"
     }
 }
 

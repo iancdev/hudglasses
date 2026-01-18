@@ -10,6 +10,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -140,12 +141,19 @@ private fun Subtitles(state: HudState) {
 
     if (text.isBlank()) return
 
-    Box(modifier = Modifier.fillMaxSize().padding(24.dp)) {
-        Box(modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter).background(Color(0xA0000000)).padding(12.dp)) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.TopCenter)
+                .padding(top = maxHeight * 0.6f)
+                .background(Color(0xA0000000))
+                .padding(14.dp)
+        ) {
             Text(
                 text = text,
                 color = Color.White,
-                style = MaterialTheme.typography.titleLarge,
+                style = MaterialTheme.typography.headlineMedium,
                 textAlign = TextAlign.Center,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
