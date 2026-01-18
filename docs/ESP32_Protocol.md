@@ -35,7 +35,14 @@ Why WebSocket:
 - Reliable delivery (better for STT than lossy UDP).
 - Simple framing (each WebSocket binary message is one audio chunk).
 
-**Acceptable alternate (if WS is painful):** TCP socket with length‑prefixed binary frames.
+**Acceptable alternate (hackathon-friendly): UDP + laptop bridge**
+- ESP32 streams raw PCM16 mono over UDP to the laptop.
+- A laptop bridge (`server/tools/udp_to_ws_bridge.py`) converts UDP → this same WebSocket protocol.
+- Easiest way to differentiate two ESP32s: **two UDP ports**
+  - left mic → UDP port `12345`
+  - right mic → UDP port `12346`
+
+This keeps ESP32 firmware very simple while allowing the server to continue using the stable `/esp32/audio` protocol.
 
 ### 2.3 Server Addressing / Provisioning
 For hackathon simplicity, ESP32 firmware SHOULD support one of:
@@ -81,6 +88,8 @@ Each binary message MUST be exactly one chunk of raw PCM:
 Example sizing at 16kHz, 20ms:
 - samples per chunk: `16000 * 0.02 = 320`
 - bytes per chunk: `320 * 2 = 640` bytes
+
+If using UDP mode, each UDP datagram SHOULD be 640 bytes (20ms). If datagrams are larger/smaller, the bridge will re-chunk them into 640-byte frames.
 
 The server will:
 - Treat each binary frame as contiguous audio for that device/role.
@@ -141,3 +150,10 @@ ESP32 firmware SHOULD:
 - Can we reliably hold **16kHz mono PCM** on ESP32 for the full demo duration?
 - Expected placement on the user (left/right) and how consistent “left vs right” energy will be.
 - Power/battery constraints (optional `batteryMv` reporting if available).
+
+## Appendix: Running the UDP bridge
+From the laptop (inside `server/.venv`):
+```bash
+cd server
+python tools/udp_to_ws_bridge.py --server ws://<laptop-ip>:8765 --left-port 12345 --right-port 12346
+```

@@ -19,10 +19,24 @@ python main.py --host 0.0.0.0 --port 8765
 ```
 
 ## C) Connect ESP32 audio streamers
+Two supported options:
+
+### Option 1 (recommended): ESP32 → server via WebSocket
 - Confirm each ESP32 connects to:
   - `ws://<laptop-ip>:8765/esp32/audio?deviceId=...&role=left`
   - `ws://<laptop-ip>:8765/esp32/audio?deviceId=...&role=right`
 - They must send a JSON `hello`, then binary PCM16LE frames.
+
+### Option 2 (hackathon-friendly): ESP32 → UDP → laptop bridge → server
+- Flash both ESP32s to stream PCM16 mono over UDP:
+  - left mic → UDP port `12345`
+  - right mic → UDP port `12346`
+- Run the bridge on the laptop:
+```bash
+cd server
+source .venv/bin/activate
+python tools/udp_to_ws_bridge.py --server ws://<laptop-ip>:8765 --left-port 12345 --right-port 12346
+```
 
 ## D) Run the Android app
 1) Open `android/` in Android Studio and install to phone.
