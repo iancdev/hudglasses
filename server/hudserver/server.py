@@ -131,6 +131,8 @@ class HudServer:
         self._direction_gain_quad: float = float(os.environ.get("DIRECTION_GAIN_QUAD", "4.5"))
         self._direction_gain_lr: float = float(os.environ.get("DIRECTION_GAIN_LR", "6.0"))
         self._direction_gain_mono: float = float(os.environ.get("DIRECTION_GAIN_MONO", "6.0"))
+        self._back_balance_gain_deg: float = float(os.environ.get("BACK_BALANCE_GAIN_DEG", "120.0"))
+        self._back_balance_exp: float = float(os.environ.get("BACK_BALANCE_EXP", "0.5"))
 
         # Frequency-based radar dots (hackathon-friendly multi-source visualization).
         self._radar_window_s: float = float(os.environ.get("RADAR_WINDOW_S", "0.5"))
@@ -825,8 +827,11 @@ class HudServer:
                 total = bl + br + 1e-6
                 balance = (br - bl) / total  # -1..+1
                 # Phone worn behind the neck: treat this as a "back" array.
-                # Map balance into a rear arc around 180deg: [-1..+1] -> [225..135].
-                raw_direction_deg = self._wrap_deg(180.0 - float(balance * 45.0))
+                # Map balance into a rear arc around 180deg. Increase sensitivity so
+                # small L/R differences show up as more lateral directions.
+                gain = float(np.clip(self._back_balance_gain_deg, 0.0, 170.0))
+                shaped = self._shape_balance(float(balance))
+                raw_direction_deg = self._wrap_deg(180.0 - (shaped * gain))
                 total = max(0.0, float(total) - self._direction_noise_floor)
                 intensity = float(np.clip(total * self._direction_gain_lr, 0.0, 1.0))
                 source = "back"
@@ -1007,7 +1012,9 @@ class HudServer:
                 # Back-only.
                 t = (e_bl + e_br) + 1e-9
                 balance = (e_br - e_bl) / t
-                raw_dir = self._wrap_deg(180.0 - float(balance * 45.0))
+                gain = float(np.clip(self._back_balance_gain_deg, 0.0, 170.0))
+                shaped = self._shape_balance(float(balance))
+                raw_dir = self._wrap_deg(180.0 - (shaped * gain))
 
             dir_deg = raw_dir
             key = int(round(float(freqs[b]) / 50.0) * 50)
@@ -1253,6 +1260,15 @@ class HudServer:
             self._world_direction_deg = self._lerp_angle(self._world_direction_deg, world_estimate, 0.2)
 
         return self._wrap_deg(self._world_direction_deg - yaw)
+
+    def _shape_balance(self, balance: float) -> float:
+        """Make small L/R differences more visible without slamming to extremes.
+
+        balance is expected in [-1, 1]. Returns a value in [-1, 1].
+        """
+        b = float(np.clip(balance, -1.0, 1.0))
+        exp = float(np.clip(self._back_balance_exp, 0.1, 1.0))
+        return float(np.sign(b) * (abs(b) ** exp))
 
     async def _check_keywords(self, text: str) -> None:
         if not self._keywords:
