@@ -10,6 +10,8 @@ type RelayStatus =
   | { type: "ready" }
   | { type: "error"; message: string };
 
+type RoleMode = "both" | "left" | "right";
+
 function clamp01(x: number): number {
   if (x < -1) return -1;
   if (x > 1) return 1;
@@ -61,6 +63,7 @@ export default function Page() {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState("ios-relay");
   const [selectedMicId, setSelectedMicId] = useState<string>("");
+  const [roleMode, setRoleMode] = useState<RoleMode>("both");
   const [log, setLog] = useState<string>("Idle.");
   const [streaming, setStreaming] = useState(false);
   const [inputSampleRate, setInputSampleRate] = useState<number | null>(null);
@@ -103,10 +106,14 @@ export default function Page() {
     const savedPort = localStorage.getItem("iosRelay.serverPort");
     const savedMic = localStorage.getItem("iosRelay.micId");
     const savedDeviceId = localStorage.getItem("iosRelay.deviceId");
+    const savedRoleMode = localStorage.getItem("iosRelay.roleMode");
     if (savedIp) setServerIp(savedIp);
     if (savedPort) setServerPort(savedPort);
     if (savedMic) setSelectedMicId(savedMic);
     if (savedDeviceId) setDeviceId(savedDeviceId);
+    if (savedRoleMode === "both" || savedRoleMode === "left" || savedRoleMode === "right") {
+      setRoleMode(savedRoleMode);
+    }
     void refreshDevices();
   }, [refreshDevices]);
 
@@ -122,6 +129,9 @@ export default function Page() {
   useEffect(() => {
     localStorage.setItem("iosRelay.deviceId", deviceId);
   }, [deviceId]);
+  useEffect(() => {
+    localStorage.setItem("iosRelay.roleMode", roleMode);
+  }, [roleMode]);
 
   const stop = useCallback(() => {
     setStreaming(false);
@@ -228,7 +238,13 @@ export default function Page() {
           serverIp,
           serverPort: Number(serverPort),
           deviceIdBase: deviceId,
-          audio: { format: "pcm_s16le", sampleRateHz: targetSampleRate, channels: 2, frameMs },
+          roles: roleMode,
+          audio: {
+            format: "pcm_s16le",
+            sampleRateHz: targetSampleRate,
+            channels: roleMode === "both" ? 2 : 1,
+            frameMs,
+          },
         })
       );
 
@@ -245,18 +261,60 @@ export default function Page() {
           addLog(`Supported constraints: channelCount=${supported.channelCount ? "yes" : "no"}`);
         }
       } catch {}
-      const constraints: MediaStreamConstraints = {
-        audio: {
-          deviceId: selectedMicId ? { exact: selectedMicId } : undefined,
-          channelCount: { ideal: 2 },
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-        },
-        video: false,
+      const gumErrorToString = (e: unknown): string => {
+        if (e && typeof e === "object") {
+          const anyE = e as any;
+          const name = typeof anyE.name === "string" ? anyE.name : "Error";
+          const message = typeof anyE.message === "string" ? anyE.message : String(e);
+          const constraint =
+            typeof anyE.constraint === "string"
+              ? anyE.constraint
+              : typeof anyE.constraintName === "string"
+                ? anyE.constraintName
+                : undefined;
+          return constraint ? `${name}: ${message} (constraint=${constraint})` : `${name}: ${message}`;
+        }
+        return String(e);
       };
 
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const getUserMediaWithFallbacks = async (): Promise<MediaStream> => {
+        const wantDeviceId = selectedMicId ? { exact: selectedMicId } : undefined;
+
+        // NOTE: On iOS Safari, some boolean constraints (and sometimes channelCount) can trigger
+        // OverconstrainedError even when provided as "ideal". Fall back progressively.
+        const baseIdeal = {
+          echoCancellation: { ideal: false },
+          noiseSuppression: { ideal: false },
+          autoGainControl: { ideal: false },
+        } as const;
+
+        const attempts: MediaStreamConstraints[] = [
+          { audio: { deviceId: wantDeviceId, channelCount: { ideal: 2 }, ...baseIdeal }, video: false },
+          { audio: { deviceId: wantDeviceId, ...baseIdeal }, video: false },
+          { audio: { channelCount: { ideal: 2 }, ...baseIdeal }, video: false },
+          { audio: { ...baseIdeal }, video: false },
+          { audio: true, video: false },
+        ];
+
+        let lastErr: unknown = null;
+        for (let i = 0; i < attempts.length; i++) {
+          const c = attempts[i];
+          try {
+            addLog(`getUserMedia attempt ${i + 1}/${attempts.length}…`);
+            return await navigator.mediaDevices.getUserMedia(c);
+          } catch (e) {
+            lastErr = e;
+            const msg = gumErrorToString(e);
+            addLog(`getUserMedia failed: ${msg}`);
+            const name = (e as any)?.name;
+            if (name === "NotAllowedError" || name === "NotFoundError") break;
+            // Otherwise, keep falling back.
+          }
+        }
+        throw lastErr;
+      };
+
+      const stream = await getUserMediaWithFallbacks();
       mediaStreamRef.current = stream;
       await refreshDevices();
       const track = stream.getAudioTracks()[0];
@@ -370,10 +428,16 @@ export default function Page() {
 
           const pcmL = floatToPcm16leBytes(frameL);
           const pcmR = floatToPcm16leBytes(frameR);
-          const combined = new Uint8Array(pcmL.length + pcmR.length);
-          combined.set(pcmL, 0);
-          combined.set(pcmR, pcmL.length);
-          wsCur.send(combined);
+          if (roleMode === "both") {
+            const combined = new Uint8Array(pcmL.length + pcmR.length);
+            combined.set(pcmL, 0);
+            combined.set(pcmR, pcmL.length);
+            wsCur.send(combined);
+          } else if (roleMode === "right") {
+            wsCur.send(pcmR);
+          } else {
+            wsCur.send(pcmL);
+          }
         }
 
         const nowMs = performance.now();
@@ -400,7 +464,10 @@ export default function Page() {
       addLog(`Start failed: ${String(e)}`);
       stop();
     }
-  }, [addLog, deviceId, frameSamples, refreshDevices, selectedMicId, serverIp, serverPort, stop, streaming]);
+  }, [addLog, deviceId, frameSamples, refreshDevices, roleMode, selectedMicId, serverIp, serverPort, stop, streaming]);
+
+  const outBytesPerMessage = roleMode === "both" ? frameSamples * 4 : frameSamples * 2;
+  const outLabel = roleMode === "both" ? "L+R" : roleMode.toUpperCase();
 
   return (
     <main className="container">
@@ -427,6 +494,14 @@ export default function Page() {
 
         <div className="row" style={{ marginTop: 12 }}>
           <div>
+            <label>Role(s)</label>
+            <select value={roleMode} onChange={(e) => setRoleMode(e.target.value as RoleMode)} disabled={streaming}>
+              <option value="both">Both (L+R)</option>
+              <option value="left">Left only</option>
+              <option value="right">Right only</option>
+            </select>
+          </div>
+          <div>
             <label>hudserver IP</label>
             <input value={serverIp} onChange={(e) => setServerIp(e.target.value)} disabled={streaming} />
           </div>
@@ -449,9 +524,8 @@ export default function Page() {
         </div>
 
         <div className="status">
-          Output: <code>pcm_s16le</code> @ <code>{targetSampleRate}Hz</code>, <code>{frameMs}ms</code> frames (
-          <code>{frameSamples * 2}B</code> per channel) → split to <code>left</code> and <code>right</code> (
-          <code>{frameSamples * 4}B</code> total per message)
+          Output: <code>pcm_s16le</code> @ <code>{targetSampleRate}Hz</code>, <code>{frameMs}ms</code> frames · mode{" "}
+          <code>{outLabel}</code> · bytes/message <code>{outBytesPerMessage}B</code>
           {"\n"}
           Input sampleRate: <code>{inputSampleRate ?? "?"}</code> · Input channels: <code>{inputChannels ?? "?"}</code>
           {"\n"}

@@ -55,5 +55,6 @@ npm run dev:https
 
 ## Notes
 
-- Audio sent is **16kHz stereo**, split into **two mono PCM16LE** streams framed at **20ms (640 bytes per channel)** and forwarded to `left` and `right`.
-- If you only need a single stream, it’s easy to change the relay to connect only one role.
+- You can choose `left`, `right`, or `both` in the UI:
+  - `both`: send stereo and split to two mono streams (20ms, 640 bytes/channel) → `role=left` + `role=right`
+  - `left`/`right`: send mono (20ms, 640 bytes) → only that role

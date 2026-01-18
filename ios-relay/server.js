@@ -78,6 +78,10 @@ async function main() {
       const serverIp = String(cfg.serverIp || "").trim() || "127.0.0.1";
       const serverPort = Number(cfg.serverPort || 8765);
       const baseId = String(cfg.deviceIdBase || "ios-relay").trim() || "ios-relay";
+      const rolesRaw = String(cfg.roles || "both").trim().toLowerCase();
+      const roles = rolesRaw === "left" || rolesRaw === "right" || rolesRaw === "both" ? rolesRaw : "both";
+      const wantLeft = roles === "left" || roles === "both";
+      const wantRight = roles === "right" || roles === "both";
       const audio = cfg.audio || {};
       const sampleRateHz = Number(audio.sampleRateHz || 16000);
       const frameMs = Number(audio.frameMs || 20);
@@ -111,22 +115,25 @@ async function main() {
 
       sendJson(ws, { type: "status", state: "connecting_hudserver", message: `${serverIp}:${serverPort}` });
 
-      left = mkClient("left");
-      right = mkClient("right");
+      left = wantLeft ? mkClient("left") : null;
+      right = wantRight ? mkClient("right") : null;
 
       await new Promise((resolve, reject) => {
         const deadline = setTimeout(() => reject(new Error("timeout connecting to hudserver")), 6000);
         const check = () => {
-          if (!left || !right) return;
-          if (left.readyState === WebSocket.OPEN && right.readyState === WebSocket.OPEN) {
-            clearTimeout(deadline);
-            resolve();
-          }
+          if (wantLeft && (!left || left.readyState !== WebSocket.OPEN)) return;
+          if (wantRight && (!right || right.readyState !== WebSocket.OPEN)) return;
+          clearTimeout(deadline);
+          resolve();
         };
-        left.on("open", check);
-        right.on("open", check);
-        left.on("error", () => {});
-        right.on("error", () => {});
+        if (left) {
+          left.on("open", check);
+          left.on("error", () => {});
+        }
+        if (right) {
+          right.on("open", check);
+          right.on("error", () => {});
+        }
         check();
       });
 
