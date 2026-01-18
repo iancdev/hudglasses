@@ -294,7 +294,7 @@ private fun rememberSmoothedRadarDots(rawDots: List<RadarDot>): List<RadarDot> {
 
 @Composable
 private fun EdgeGlow(state: HudState, dots: List<RadarDot>) {
-    val thickness: Dp = 120.dp
+    val thickness: Dp = 100.dp
 
     // Alarm overlays keep the old full-edge glow.
     val alarmGlow: Color? =
@@ -321,13 +321,13 @@ private fun EdgeGlow(state: HudState, dots: List<RadarDot>) {
             val i = intensity.coerceIn(0f, 1f)
             if (i <= 0.01f) return
 
-            // Slightly less intense overall, with the anchor point still the brightest.
-            // Use a slower falloff (more gradual fade) but keep the glow confined to the edge band.
-            val alpha = (0.14f + 0.55f * i).coerceIn(0f, 1f)
-            val c0 = color.copy(alpha = alpha * 0.95f)
-            val c1 = color.copy(alpha = alpha * 0.55f)
-            val c2 = color.copy(alpha = alpha * 0.30f)
-            val c3 = color.copy(alpha = alpha * 0.16f)
+            // Glow a bit more overall, but keep it smaller and make the falloff smoother.
+            val alpha = (0.16f + 0.62f * i).coerceIn(0f, 1f)
+            val c0 = color.copy(alpha = alpha * 1.00f)
+            val c1 = color.copy(alpha = alpha * 0.72f)
+            val c2 = color.copy(alpha = alpha * 0.50f)
+            val c3 = color.copy(alpha = alpha * 0.34f)
+            val c4 = color.copy(alpha = alpha * 0.22f)
 
             // Keep the glow confined to the edge band (thickness = t) and ensure it fades out
             // before reaching the inner edge, so it never looks "cut off".
@@ -335,16 +335,17 @@ private fun EdgeGlow(state: HudState, dots: List<RadarDot>) {
             val fadePx = band * 0.98f
             // Larger radius => wider glow spread along the edge. The fadeStop below keeps the
             // glow confined to the edge band so it doesn't "reach inward" more than before.
-            val radius = (band * (8.5f + 18.0f * i)).coerceAtLeast(band * 6.0f)
+            val radius = (band * (7.0f + 14.0f * i)).coerceAtLeast(band * 5.0f)
             val fadeStop = (fadePx / radius).coerceIn(0.05f, 0.98f)
             val brush =
                 Brush.radialGradient(
                     colorStops =
                         arrayOf(
                             0.00f to c0,
-                            (fadeStop * 0.15f) to c1,
-                            (fadeStop * 0.45f) to c2,
-                            (fadeStop * 0.75f) to c3,
+                            (fadeStop * 0.10f) to c1,
+                            (fadeStop * 0.28f) to c2,
+                            (fadeStop * 0.52f) to c3,
+                            (fadeStop * 0.78f) to c4,
                             fadeStop to Color.Transparent,
                             1.00f to Color.Transparent,
                         ),
@@ -412,20 +413,21 @@ private fun EdgeGlow(state: HudState, dots: List<RadarDot>) {
 
         // Alarm overlay last (so it's always visible).
         if (alarmGlow != null) {
-            val alpha = 0.85f
+            val alpha = 0.82f
             val c = alarmGlow.copy(alpha = alpha)
             val band = t
-            val radius = t * 24.0f
+            val radius = t * 19.0f
             val fadePx = band * 0.98f
             val fadeStop = (fadePx / radius).coerceIn(0.05f, 0.98f)
             val brush =
                 Brush.radialGradient(
                     colorStops =
                         arrayOf(
-                            0.00f to c.copy(alpha = alpha * 0.95f),
-                            (fadeStop * 0.15f) to c.copy(alpha = alpha * 0.55f),
-                            (fadeStop * 0.45f) to c.copy(alpha = alpha * 0.30f),
-                            (fadeStop * 0.75f) to c.copy(alpha = alpha * 0.16f),
+                            0.00f to c.copy(alpha = alpha * 1.00f),
+                            (fadeStop * 0.10f) to c.copy(alpha = alpha * 0.72f),
+                            (fadeStop * 0.28f) to c.copy(alpha = alpha * 0.50f),
+                            (fadeStop * 0.52f) to c.copy(alpha = alpha * 0.34f),
+                            (fadeStop * 0.78f) to c.copy(alpha = alpha * 0.22f),
                             fadeStop to Color.Transparent,
                             1.00f to Color.Transparent,
                         ),
