@@ -294,6 +294,7 @@ class HudServer:
             81,
         )
         self._external_haptics_format: str = (os.environ.get("EXTERNAL_HAPTICS_FORMAT") or "csv").strip().lower()
+        self._external_haptics_open_timeout_s: float = float(os.environ.get("EXTERNAL_HAPTICS_OPEN_TIMEOUT_S") or "8.0")
         self._external_haptics_intensity: int = int(os.environ.get("EXTERNAL_HAPTICS_INTENSITY") or "255")
         self._external_haptics_keyword_ms: int = int(os.environ.get("EXTERNAL_HAPTICS_KEYWORD_MS") or "250")
         self._external_haptics_horn_ms: int = int(os.environ.get("EXTERNAL_HAPTICS_HORN_MS") or "250")
@@ -420,6 +421,7 @@ class HudServer:
                 name="left",
                 url=self._external_haptics_left_url,
                 payload_format=self._external_haptics_format,
+                open_timeout_s=float(self._external_haptics_open_timeout_s),
                 max_queue=10,
                 logger=self._logger,
             )
@@ -427,6 +429,7 @@ class HudServer:
                 name="right",
                 url=self._external_haptics_right_url,
                 payload_format=self._external_haptics_format,
+                open_timeout_s=float(self._external_haptics_open_timeout_s),
                 max_queue=10,
                 logger=self._logger,
             )

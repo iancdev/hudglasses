@@ -22,12 +22,14 @@ class ExternalHapticsClient:
         name: str,
         url: str,
         payload_format: str = "csv",
+        open_timeout_s: float = 8.0,
         max_queue: int = 100,
         logger: logging.Logger | None = None,
     ) -> None:
         self._name = name
         self._url = url
         self._payload_format = (payload_format or "csv").strip().lower()
+        self._open_timeout_s = float(max(0.1, open_timeout_s))
         self._q: asyncio.Queue[str] = asyncio.Queue(maxsize=max(1, int(max_queue)))
         self._logger = logger or logging.getLogger(__name__)
 
@@ -70,7 +72,7 @@ class ExternalHapticsClient:
                 # - small max_queue + drain incoming messages (some firmwares reply per command)
                 async with websockets.connect(
                     self._url,
-                    open_timeout=5,
+                    open_timeout=self._open_timeout_s,
                     ping_interval=None,
                     close_timeout=2,
                     max_size=64 * 1024,
