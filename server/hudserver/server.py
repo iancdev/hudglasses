@@ -44,6 +44,12 @@ class HeadPoseState:
 
 
 @dataclass(slots=True)
+class TorsoPoseState:
+    yaw_deg: float
+    last_seen_monotonic: float
+
+
+@dataclass(slots=True)
 class AndroidClientInfo:
     v: int | None
     client: str | None
@@ -74,7 +80,7 @@ class RadarTrack:
     track_id: int
     freq_hz: float
     intensity: float
-    world_direction_deg: float
+    torso_direction_deg: float
     last_seen_monotonic: float
 
 
@@ -129,8 +135,11 @@ class HudServer:
 
         self._esp32_by_role: dict[str, Esp32AudioState] = {}
         self._head_pose: HeadPoseState | None = None
+        self._torso_pose: TorsoPoseState | None = None
+        self._cal_head_yaw0: float | None = None
+        self._cal_torso_yaw0: float | None = None
 
-        self._world_direction_deg: float | None = None
+        self._smoothed_torso_direction_deg: float | None = None
         self._latest_direction_payload: dict[str, Any] = {}
         self._direction_log_last_s: float = 0.0
         self._direction_noise_floor: float = float(os.environ.get("DIRECTION_NOISE_FLOOR", "0.002"))
@@ -139,6 +148,13 @@ class HudServer:
         self._direction_gain_mono: float = float(os.environ.get("DIRECTION_GAIN_MONO", "6.0"))
         self._back_balance_gain_deg: float = float(os.environ.get("BACK_BALANCE_GAIN_DEG", "150.0"))
         self._back_balance_exp: float = float(os.environ.get("BACK_BALANCE_EXP", "0.8"))
+
+        # Approximate mic geometry (mm) for 4-corner neckband layout:
+        # - back edge is the phone (rear), front edge is the ESP32s (forward).
+        self._array_back_width_mm: float = float(os.environ.get("ARRAY_BACK_WIDTH_MM", "154.30"))
+        self._array_front_width_mm: float = float(os.environ.get("ARRAY_FRONT_WIDTH_MM", "184.451"))
+        self._array_side_len_mm: float = float(os.environ.get("ARRAY_SIDE_LEN_MM", "132.846"))
+        self._mic_positions_xy: dict[str, tuple[float, float]] = self._compute_mic_positions_xy()
 
         # Frequency-based radar dots (hackathon-friendly multi-source visualization).
         self._radar_window_s: float = float(os.environ.get("RADAR_WINDOW_S", "0.5"))
@@ -155,7 +171,6 @@ class HudServer:
         self._radar_outlier_ratio_thresh: float = float(os.environ.get("RADAR_OUTLIER_RATIO_THRESH", "0.7"))
         self._radar_last_baseline: np.ndarray | None = None
         self._radar_last_compute_s: float = 0.0
-        self._radar_dots: list[dict[str, Any]] = []
         self._radar_tracks: dict[int, RadarTrack] = {}
         self._radar_next_track_id: int = 1
         self._radar_track_freq_tol_hz: float = float(os.environ.get("RADAR_TRACK_FREQ_TOL_HZ", "250"))
@@ -191,6 +206,64 @@ class HudServer:
         self._reset_alarm_state_on_connect: bool = not self._enable_heuristic_alarms
 
         self._stop = asyncio.Event()
+
+    def _compute_mic_positions_xy(self) -> dict[str, tuple[float, float]]:
+        back = max(1e-3, float(self._array_back_width_mm))
+        front = max(1e-3, float(self._array_front_width_mm))
+        side = max(1e-3, float(self._array_side_len_mm))
+        dx = 0.5 * (front - back)
+        depth_sq = (side * side) - (dx * dx)
+        depth = float(np.sqrt(max(1e-6, depth_sq)))
+        y = 0.5 * depth
+        return {
+            "bl": (-0.5 * back, -y),
+            "br": (0.5 * back, -y),
+            "fl": (-0.5 * front, y),
+            "fr": (0.5 * front, y),
+        }
+
+    def _fresh_head_pose(self, now: float) -> HeadPoseState | None:
+        pose = self._head_pose
+        if pose is None:
+            return None
+        if (now - pose.last_seen_monotonic) > 1.0:
+            return None
+        return pose
+
+    def _fresh_torso_pose(self, now: float) -> TorsoPoseState | None:
+        pose = self._torso_pose
+        if pose is None:
+            return None
+        if (now - pose.last_seen_monotonic) > 1.0:
+            return None
+        return pose
+
+    def _maybe_auto_calibrate_pose_zero(self, now: float) -> None:
+        if self._cal_head_yaw0 is not None or self._cal_torso_yaw0 is not None:
+            return
+        head = self._fresh_head_pose(now)
+        torso = self._fresh_torso_pose(now)
+        if head is None or torso is None:
+            return
+        self._cal_head_yaw0 = float(head.yaw_deg)
+        self._cal_torso_yaw0 = float(torso.yaw_deg)
+        self._logger.info(
+            "Auto-calibrated pose zero head0Yaw=%.1f torso0Yaw=%.1f",
+            self._cal_head_yaw0,
+            self._cal_torso_yaw0,
+        )
+
+    def _head_to_torso_delta_yaw_deg(self, now: float) -> float:
+        head = self._fresh_head_pose(now)
+        torso = self._fresh_torso_pose(now)
+        if head is None or torso is None:
+            return 0.0
+        self._maybe_auto_calibrate_pose_zero(now)
+        if self._cal_head_yaw0 is None or self._cal_torso_yaw0 is None:
+            return 0.0
+        head_rel = self._wrap_deg(float(head.yaw_deg) - float(self._cal_head_yaw0))
+        torso_rel = self._wrap_deg(float(torso.yaw_deg) - float(self._cal_torso_yaw0))
+        return self._wrap_deg(head_rel - torso_rel)
 
     async def run(self) -> None:
         self._logger.info("Starting server on %s:%s", self._host, self._port)
@@ -288,6 +361,38 @@ class HudServer:
                         pitch_deg=pitch,
                         roll_deg=roll,
                         last_seen_monotonic=asyncio.get_running_loop().time(),
+                    )
+                elif msg_type == "torso_pose":
+                    try:
+                        yaw = float(obj.get("yawDeg", obj.get("yaw")))
+                    except Exception:
+                        continue
+                    self._torso_pose = TorsoPoseState(
+                        yaw_deg=yaw,
+                        last_seen_monotonic=asyncio.get_running_loop().time(),
+                    )
+                elif msg_type == "calibrate.pose_zero":
+                    now = asyncio.get_running_loop().time()
+                    head = self._fresh_head_pose(now)
+                    torso = self._fresh_torso_pose(now)
+                    if head is not None:
+                        self._cal_head_yaw0 = float(head.yaw_deg)
+                    if torso is not None:
+                        self._cal_torso_yaw0 = float(torso.yaw_deg)
+                    self._logger.info(
+                        "Calibrate pose zero head0Yaw=%s torso0Yaw=%s",
+                        self._cal_head_yaw0,
+                        self._cal_torso_yaw0,
+                    )
+                    await conn.send(
+                        dumps(
+                            {
+                                "type": "calibrate.pose_zero",
+                                "ok": True,
+                                "head0YawDeg": self._cal_head_yaw0,
+                                "torso0YawDeg": self._cal_torso_yaw0,
+                            }
+                        )
                     )
                 elif msg_type == "config.update":
                     # Optional tuning knobs for demo.
@@ -730,6 +835,12 @@ class HudServer:
                 "pitchDeg": self._head_pose.pitch_deg,
                 "rollDeg": self._head_pose.roll_deg,
             }
+        torso_pose = None
+        if self._torso_pose is not None:
+            torso_pose = {
+                "yawDeg": self._torso_pose.yaw_deg,
+                "ageS": float(max(0.0, now - self._torso_pose.last_seen_monotonic)),
+            }
 
         android_clients: list[dict[str, Any]] = []
         for info in list(self._android_info.values()):
@@ -751,6 +862,13 @@ class HudServer:
             "androidMic": android_mic,
             "sttAudioSource": self._stt_audio_source,
             "headPose": head_pose,
+            "torsoPose": torso_pose,
+            "poseZero": {"head0YawDeg": self._cal_head_yaw0, "torso0YawDeg": self._cal_torso_yaw0},
+            "arrayGeometry": {
+                "backWidthMm": self._array_back_width_mm,
+                "frontWidthMm": self._array_front_width_mm,
+                "sideLenMm": self._array_side_len_mm,
+            },
         }
 
     async def _status_loop(self) -> None:
@@ -877,10 +995,10 @@ class HudServer:
 
             if (now - self._radar_last_compute_s) >= 0.2:
                 self._radar_last_compute_s = now
-                self._radar_dots = self._compute_radar_dots(now)
+                self._update_radar_tracks(now)
 
             source: str | None = None
-            raw_direction_deg: float | None = None
+            raw_direction_deg: float | None = None  # torso frame
             intensity: float | None = None
 
             # ESP32: front-left / front-right
@@ -905,12 +1023,19 @@ class HudServer:
             bl = max(0.0, mic.last_rms_left) if has_back and mic else 0.0
             br = max(0.0, mic.last_rms_right) if has_back and mic else 0.0
 
+            delta_yaw = self._head_to_torso_delta_yaw_deg(now)
+            radar_dots = self._emit_radar_tracks(now, delta_yaw)
+
             if has_front and has_back:
-                # 4-mic spatial estimate (front-left/front-right + back-left/back-right).
-                # Map each mic to a quadrant and take a weighted vector sum.
-                w = 0.70710678  # sin/cos(45deg)
-                x = w * ((fr - fl) + (br - bl))  # right-positive
-                y = w * ((fr + fl) - (br + bl))  # front-positive
+                # 4-mic spatial estimate using the trapezoid geometry and energy-weighted centroid.
+                # (Still ILD/energy-based; no TDOA.)
+                pos = self._mic_positions_xy
+                e_fl = float(fl) * float(fl)
+                e_fr = float(fr) * float(fr)
+                e_bl = float(bl) * float(bl)
+                e_br = float(br) * float(br)
+                x = (e_fr * pos["fr"][0]) + (e_fl * pos["fl"][0]) + (e_br * pos["br"][0]) + (e_bl * pos["bl"][0])
+                y = (e_fr * pos["fr"][1]) + (e_fl * pos["fl"][1]) + (e_br * pos["br"][1]) + (e_bl * pos["bl"][1])
                 raw_direction_deg = float(np.degrees(np.arctan2(x, y)))
                 total = fl + fr + bl + br
                 total = max(0.0, float(total) - self._direction_noise_floor)
@@ -963,14 +1088,17 @@ class HudServer:
             if raw_direction_deg is None or intensity is None or source is None:
                 continue
 
-            direction_deg = self._stabilize_direction(raw_direction_deg)
+            torso_dir_deg = self._stabilize_direction(raw_direction_deg)
+            direction_deg = self._wrap_deg(float(torso_dir_deg) - float(delta_yaw))
             ui = self._direction_to_ui(direction_deg, intensity)
             payload = {
                 "source": source,
                 "directionDeg": direction_deg,
                 "rawDirectionDeg": raw_direction_deg,
+                "torsoDirectionDeg": float(torso_dir_deg),
+                "deltaYawDeg": float(delta_yaw),
                 "intensity": intensity,
-                "radarDots": self._radar_dots,
+                "radarDots": radar_dots,
                 **ui,
             }
             self._latest_direction_payload = payload
@@ -988,7 +1116,7 @@ class HudServer:
             )
             await self._broadcast_events({"type": "direction.ui", **payload})
 
-    def _compute_radar_dots(self, now: float) -> list[dict[str, Any]]:
+    def _update_radar_tracks(self, now: float) -> None:
         # Compute a few frequency-peaks and estimate a direction per peak, then
         # smooth/lock them into short-lived tracks so the HUD shows sustained sources.
         sample_rate_hz = 16000
@@ -997,7 +1125,7 @@ class HudServer:
         has_back = (now - self._radar_seen_bl) < 1.0 and (now - self._radar_seen_br) < 1.0
 
         if not has_front and not has_back:
-            return []
+            return
 
         fl = self._radar_buf_fl.get() if has_front else None
         fr = self._radar_buf_fr.get() if has_front else None
@@ -1006,11 +1134,11 @@ class HudServer:
 
         arrays = [a for a in (fl, fr, bl, br) if a is not None and a.size > 0]
         if not arrays:
-            return []
+            return
 
         n = int(min(a.size for a in arrays))
         if n < 2048:
-            return []
+            return
 
         # Use the most recent aligned window across available channels.
         if fl is not None:
@@ -1037,7 +1165,7 @@ class HudServer:
 
         ref = next((p for p in (p_fl, p_fr, p_bl, p_br) if p is not None), None)
         if ref is None:
-            return []
+            return
         total = np.zeros_like(ref)
         for p in (p_fl, p_fr, p_bl, p_br):
             if p is not None:
@@ -1047,16 +1175,11 @@ class HudServer:
         mask = (freqs >= self._radar_min_freq_hz) & (freqs <= self._radar_max_freq_hz)
         idx = np.where(mask)[0]
         if idx.size == 0:
-            return []
-
-        pose = self._head_pose
-        yaw = None
-        if pose is not None and (asyncio.get_running_loop().time() - pose.last_seen_monotonic) <= 1.0:
-            yaw = pose.yaw_deg
+            return
 
         max_power = float(np.max(total[idx]))
         if max_power <= 0.0:
-            return self._emit_radar_tracks(now, yaw)
+            return
 
         # Maintain a slow-moving "baseline" spectrum, then treat boosted (outlier) bands as sources.
         baseline = self._radar_last_baseline
@@ -1074,7 +1197,7 @@ class HudServer:
         excess = np.maximum(total - baseline, 0.0).astype(np.float32, copy=False)
         max_excess = float(np.max(excess[idx]))
         if max_excess <= 0.0:
-            return self._emit_radar_tracks(now, yaw)
+            return
 
         # Pick a few distinct outlier peaks (avoid adjacent bins).
         bin_hz = float(sample_rate_hz) / float(n)
@@ -1099,7 +1222,7 @@ class HudServer:
             if len(peaks) >= max(1, self._radar_max_dots):
                 break
         if not peaks:
-            return []
+            return
 
         band_bins = max(1, int(120.0 / max(bin_hz, 1e-6)))
 
@@ -1120,7 +1243,6 @@ class HudServer:
 
         candidates: list[tuple[float, float, float]] = []
         # (freq_hz, intensity, raw_dir_deg)
-        w = 0.70710678
         for b, e_fl, e_fr, e_bl, e_br, band_total, band_excess in energies:
             if band_total <= 0.0 or band_excess <= 0.0:
                 continue
@@ -1136,8 +1258,9 @@ class HudServer:
             e_br *= scale
 
             if has_front and has_back:
-                x = w * ((e_fr - e_fl) + (e_br - e_bl))
-                y = w * ((e_fr + e_fl) - (e_br + e_bl))
+                pos = self._mic_positions_xy
+                x = (e_fr * pos["fr"][0]) + (e_fl * pos["fl"][0]) + (e_br * pos["br"][0]) + (e_bl * pos["bl"][0])
+                y = (e_fr * pos["fr"][1]) + (e_fl * pos["fl"][1]) + (e_br * pos["br"][1]) + (e_bl * pos["bl"][1])
                 raw_dir = float(np.degrees(np.arctan2(x, y)))
             elif has_front:
                 t = (e_fl + e_fr) + 1e-9
@@ -1164,8 +1287,7 @@ class HudServer:
             candidates.append((float(freq_hz), float(intensity), float(raw_dir)))
 
         if not candidates:
-            # Fade out existing tracks.
-            return self._emit_radar_tracks(now, yaw)
+            return
 
         # Track association: greedily match strongest candidates to existing tracks by frequency.
         candidates.sort(key=lambda c: c[1], reverse=True)
@@ -1190,12 +1312,11 @@ class HudServer:
                 # New track.
                 tid = self._radar_next_track_id
                 self._radar_next_track_id += 1
-                world_dir = self._wrap_deg(float(yaw) + float(raw_dir)) if yaw is not None else float(raw_dir)
                 self._radar_tracks[tid] = RadarTrack(
                     track_id=tid,
                     freq_hz=float(freq_hz),
                     intensity=float(intensity),
-                    world_direction_deg=float(world_dir),
+                    torso_direction_deg=float(raw_dir),
                     last_seen_monotonic=float(now),
                 )
                 used_tracks.add(tid)
@@ -1205,18 +1326,11 @@ class HudServer:
             tr = self._radar_tracks[best_id]
             tr.freq_hz = self._ema(tr.freq_hz, float(freq_hz), a_freq)
             tr.intensity = self._ema(tr.intensity, float(intensity), a_int)
-            if yaw is not None:
-                world_estimate = self._wrap_deg(float(yaw) + float(raw_dir))
-                tr.world_direction_deg = self._lerp_angle(tr.world_direction_deg, world_estimate, a_dir)
-            else:
-                # No head pose: smooth in "relative" space.
-                tr.world_direction_deg = self._lerp_angle(tr.world_direction_deg, float(raw_dir), a_dir)
+            tr.torso_direction_deg = self._lerp_angle(tr.torso_direction_deg, float(raw_dir), a_dir)
             tr.last_seen_monotonic = float(now)
             used_tracks.add(best_id)
 
-        return self._emit_radar_tracks(now, yaw)
-
-    def _emit_radar_tracks(self, now: float, yaw: float | None) -> list[dict[str, Any]]:
+    def _emit_radar_tracks(self, now: float, delta_yaw_deg: float) -> list[dict[str, Any]]:
         # Prune/decay tracks and emit the top-N by display intensity.
         tau = max(0.1, float(self._radar_track_decay_tau_s))
         min_i = max(0.0, float(self._radar_track_min_intensity))
@@ -1233,15 +1347,14 @@ class HudServer:
                 self._radar_tracks.pop(tid, None)
                 continue
 
-            dir_deg = tr.world_direction_deg
-            if yaw is not None:
-                dir_deg = self._wrap_deg(tr.world_direction_deg - float(yaw))
-            ui = self._direction_to_ui(dir_deg, display_i)
+            dir_head = self._wrap_deg(float(tr.torso_direction_deg) - float(delta_yaw_deg))
+            ui = self._direction_to_ui(dir_head, display_i)
             dots.append(
                 {
                     "trackId": int(tr.track_id),
                     "freqHz": float(tr.freq_hz),
-                    "directionDeg": float(dir_deg),
+                    "directionDeg": float(dir_head),
+                    "torsoDirectionDeg": float(tr.torso_direction_deg),
                     "intensity": float(display_i),
                     "radarX": float(ui.get("radarX", 0.0)),
                     "radarY": float(ui.get("radarY", 0.0)),
@@ -1450,19 +1563,12 @@ class HudServer:
         return self._wrap_deg(a_deg + delta * t)
 
     def _stabilize_direction(self, raw_direction_deg: float) -> float:
-        pose = self._head_pose
-        if pose is None or (asyncio.get_running_loop().time() - pose.last_seen_monotonic) > 1.0:
-            self._world_direction_deg = None
-            return raw_direction_deg
-
-        yaw = pose.yaw_deg
-        world_estimate = self._wrap_deg(yaw + raw_direction_deg)
-        if self._world_direction_deg is None:
-            self._world_direction_deg = world_estimate
+        # Keep this helper for backward compatibility: simple smoothing in torso space.
+        if self._smoothed_torso_direction_deg is None:
+            self._smoothed_torso_direction_deg = float(raw_direction_deg)
         else:
-            self._world_direction_deg = self._lerp_angle(self._world_direction_deg, world_estimate, 0.2)
-
-        return self._wrap_deg(self._world_direction_deg - yaw)
+            self._smoothed_torso_direction_deg = self._lerp_angle(self._smoothed_torso_direction_deg, float(raw_direction_deg), 0.25)
+        return float(self._smoothed_torso_direction_deg)
 
     def _shape_balance(self, balance: float) -> float:
         """Make small L/R differences more visible without slamming to extremes.

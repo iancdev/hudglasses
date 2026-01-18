@@ -45,6 +45,7 @@ class RemoteActivity : ComponentActivity() {
     private var hudPresentation: HudPresentation? = null
     private lateinit var displayManager: DisplayManager
     private lateinit var wsController: WsController
+    private lateinit var torsoImuController: TorsoImuController
     private lateinit var vitureImuController: VitureImuController
     private lateinit var hapticsController: HapticsController
     private lateinit var phoneAudioStreamer: MicSttStreamer
@@ -82,6 +83,10 @@ class RemoteActivity : ComponentActivity() {
         hapticsController.setDirectionEnabled(HudStore.state.value.phoneDirectionHapticsEnabled)
         wsController = WsController(
             onEvents = { evt -> hapticsController.onEvent(evt) },
+        )
+        torsoImuController = TorsoImuController(
+            context = this,
+            onPose = { pose -> wsController.sendOnEventsChannel(pose) },
         )
         phoneAudioStreamer = MicSttStreamer(
             onAudioFrame = { frame -> wsController.sendSttAudioFrame(frame) },
@@ -127,6 +132,13 @@ class RemoteActivity : ComponentActivity() {
                             wsController.sendOnEventsChannel(
                                 JSONObject()
                                     .put("type", "status.request")
+                            )
+                        },
+                        onCalibratePoseZero = {
+                            wsController.sendOnEventsChannel(
+                                JSONObject()
+                                    .put("type", "calibrate.pose_zero")
+                                    .put("v", 1),
                             )
                         },
                         onSetPhoneAudioFallbackEnabled = { enabled -> setPhoneAudioFallbackEnabled(enabled) },
@@ -179,10 +191,12 @@ class RemoteActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        torsoImuController.start()
         vitureImuController.start()
     }
 
     override fun onPause() {
+        torsoImuController.stop()
         vitureImuController.stop()
         super.onPause()
     }
@@ -192,6 +206,7 @@ class RemoteActivity : ComponentActivity() {
         displayManager.unregisterDisplayListener(displayListener)
         vitureImuController.stop()
         vitureImuController.release()
+        torsoImuController.stop()
         wsController.close()
         hapticsController.stop()
         phoneAudioStreamer.close()
@@ -320,6 +335,7 @@ private fun RemoteUi(
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onRequestStatus: () -> Unit,
+    onCalibratePoseZero: () -> Unit,
     onSetPhoneAudioFallbackEnabled: (Boolean) -> Unit,
     onSetPhoneHapticsEnabled: (Boolean) -> Unit,
     onSetPhoneDirectionHapticsEnabled: (Boolean) -> Unit,
@@ -427,6 +443,9 @@ private fun RemoteUi(
             }
             Button(onClick = onRequestStatus) {
                 Text("Refresh")
+            }
+            Button(onClick = onCalibratePoseZero) {
+                Text("Calibrate")
             }
             Text("Events: ${if (state.eventsConnected) "connected" else "disconnected"}")
             Text("STT: ${state.sttStatus.ifBlank { if (state.sttConnected) "connected" else "disconnected" }}")
