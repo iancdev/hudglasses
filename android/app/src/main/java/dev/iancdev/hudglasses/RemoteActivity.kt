@@ -2,6 +2,7 @@ package dev.iancdev.hudglasses
 
 import android.Manifest
 import android.content.Context
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.hardware.display.DisplayManager
 import android.os.Build
@@ -40,19 +41,19 @@ class RemoteActivity : ComponentActivity() {
     private lateinit var wsController: WsController
     private lateinit var vitureImuController: VitureImuController
     private lateinit var hapticsController: HapticsController
-    private lateinit var micSttStreamer: MicSttStreamer
+    private lateinit var phoneAudioStreamer: MicSttStreamer
 
-    private var micSttRequested: Boolean = false
+    private var phoneAudioRequested: Boolean = false
 
     private val micPermLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (!micSttRequested) return@registerForActivityResult
-        micSttRequested = false
+        if (!phoneAudioRequested) return@registerForActivityResult
+        phoneAudioRequested = false
         if (granted) {
-            enableMicSttInternal()
+            enablePhoneAudioFallbackInternal()
         } else {
-            HudStore.update { it.copy(micSttEnabled = false) }
+            HudStore.update { it.copy(phoneAudioFallbackEnabled = false) }
         }
     }
 
@@ -74,7 +75,7 @@ class RemoteActivity : ComponentActivity() {
         wsController = WsController(
             onEvents = { evt -> hapticsController.onEvent(evt) },
         )
-        micSttStreamer = MicSttStreamer(
+        phoneAudioStreamer = MicSttStreamer(
             onAudioFrame = { frame -> wsController.sendSttAudioFrame(frame) },
         )
         vitureImuController = VitureImuController(
@@ -102,7 +103,7 @@ class RemoteActivity : ComponentActivity() {
                     RemoteUi(
                         onConnect = { wsController.connect(HudStore.state.value.serverUrl) },
                         onDisconnect = { wsController.disconnect() },
-                        onSetMicSttEnabled = { enabled -> setMicSttEnabled(enabled) },
+                        onSetPhoneAudioFallbackEnabled = { enabled -> setPhoneAudioFallbackEnabled(enabled) },
                         onSetVitureImu = { enabled -> vitureImuController.setImuEnabled(enabled) },
                         onSetViture3d = { enabled -> vitureImuController.set3dEnabled(enabled) },
                         onSetVitureImuFreq = { mode -> vitureImuController.setImuFrequency(mode) },
@@ -157,7 +158,7 @@ class RemoteActivity : ComponentActivity() {
         vitureImuController.stop()
         vitureImuController.release()
         wsController.close()
-        micSttStreamer.close()
+        phoneAudioStreamer.close()
         hudPresentation?.dismiss()
         hudPresentation = null
     }
@@ -178,20 +179,21 @@ class RemoteActivity : ComponentActivity() {
         hudPresentation = HudPresentation(this, external, owner = this).also { it.show() }
     }
 
-    private fun setMicSttEnabled(enabled: Boolean) {
+    private fun setPhoneAudioFallbackEnabled(enabled: Boolean) {
         if (enabled) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                enableMicSttInternal()
+                enablePhoneAudioFallbackInternal()
                 return
             }
-            micSttRequested = true
+            phoneAudioRequested = true
             micPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
             return
         }
 
-        micSttRequested = false
-        micSttStreamer.stop()
-        HudStore.update { it.copy(micSttEnabled = false) }
+        phoneAudioRequested = false
+        phoneAudioStreamer.stop()
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        HudStore.update { it.copy(phoneAudioFallbackEnabled = false) }
         wsController.sendOnEventsChannel(
             JSONObject()
                 .put("type", "audio.source")
@@ -199,15 +201,23 @@ class RemoteActivity : ComponentActivity() {
         )
     }
 
-    private fun enableMicSttInternal() {
+    private fun enablePhoneAudioFallbackInternal() {
         val sampleRateHz = 16000
         val frameMs = 20
-        HudStore.update { it.copy(micSttEnabled = true) }
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+
+        val started = phoneAudioStreamer.start(sampleRateHz = sampleRateHz, frameMs = frameMs, preferStereo = true)
+        if (started == null) {
+            HudStore.update { it.copy(phoneAudioFallbackEnabled = false, sttError = "Failed to start phone mic") }
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            return
+        }
+        HudStore.update { it.copy(phoneAudioFallbackEnabled = true, sttError = "") }
 
         wsController.sendOnEventsChannel(
             JSONObject()
                 .put("type", "audio.source")
-                .put("source", "android_mic")
+                .put("source", "auto")
         )
 
         wsController.sendOnSttChannel(
@@ -219,13 +229,11 @@ class RemoteActivity : ComponentActivity() {
                     "audio",
                     JSONObject()
                         .put("format", "pcm_s16le")
-                        .put("sampleRateHz", sampleRateHz)
-                        .put("channels", 1)
-                        .put("frameMs", frameMs),
+                        .put("sampleRateHz", started.sampleRateHz)
+                        .put("channels", started.channels)
+                        .put("frameMs", started.frameMs),
                 )
         )
-
-        micSttStreamer.start(sampleRateHz = sampleRateHz, frameMs = frameMs)
     }
 }
 
@@ -233,7 +241,7 @@ class RemoteActivity : ComponentActivity() {
 private fun RemoteUi(
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
-    onSetMicSttEnabled: (Boolean) -> Unit,
+    onSetPhoneAudioFallbackEnabled: (Boolean) -> Unit,
     onSetVitureImu: (Boolean) -> Unit,
     onSetViture3d: (Boolean) -> Unit,
     onSetVitureImuFreq: (Int) -> Unit,
@@ -256,10 +264,10 @@ private fun RemoteUi(
         Text("HUD Glasses Remote", style = MaterialTheme.typography.headlineSmall)
 
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Phone mic STT")
+            Text("Phone Audio Fallback Mode")
             Switch(
-                checked = state.micSttEnabled,
-                onCheckedChange = onSetMicSttEnabled,
+                checked = state.phoneAudioFallbackEnabled,
+                onCheckedChange = onSetPhoneAudioFallbackEnabled,
             )
         }
 

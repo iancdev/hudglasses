@@ -52,9 +52,15 @@ class AndroidClientInfo:
 class AndroidMicState:
     device_id: str
     sample_rate_hz: int
+    channels: int
     frame_ms: int
     bytes_per_frame: int
+    mono_bytes_per_frame: int
     stt_q: asyncio.Queue[bytes]
+    analysis_q: asyncio.Queue[bytes]
+    last_rms: float
+    last_rms_left: float
+    last_rms_right: float
     last_seen_monotonic: float
     dropped_frames: int
 
@@ -221,6 +227,7 @@ class HudServer:
                     audio = obj.get("audio") or {}
                     audio_format = str(audio.get("format") or "pcm_s16le")
                     sample_rate_hz = int(audio.get("sampleRateHz") or 16000)
+                    channels = int(audio.get("channels") or 1)
                     frame_ms = int(audio.get("frameMs") or 20)
                     device_id = str(obj.get("deviceId") or "android")
                     if audio_format != "pcm_s16le":
@@ -229,18 +236,34 @@ class HudServer:
                     if sample_rate_hz != 16000:
                         self._logger.warning("Android mic deviceId=%s sampleRateHz=%s (expected 16000)", device_id, sample_rate_hz)
                         continue
+                    if channels not in (1, 2):
+                        self._logger.warning("Android mic deviceId=%s channels=%s (expected 1 or 2)", device_id, channels)
+                        continue
                     samples_per_frame = int(sample_rate_hz * (frame_ms / 1000.0))
-                    bytes_per_frame = samples_per_frame * 2
+                    mono_bytes_per_frame = samples_per_frame * 2
+                    bytes_per_frame = mono_bytes_per_frame * channels
                     self._android_mic_by_conn[conn] = AndroidMicState(
                         device_id=device_id,
                         sample_rate_hz=sample_rate_hz,
+                        channels=channels,
                         frame_ms=frame_ms,
                         bytes_per_frame=bytes_per_frame,
+                        mono_bytes_per_frame=mono_bytes_per_frame,
                         stt_q=asyncio.Queue(maxsize=200),
+                        analysis_q=asyncio.Queue(maxsize=200),
+                        last_rms=0.0,
+                        last_rms_left=0.0,
+                        last_rms_right=0.0,
                         last_seen_monotonic=asyncio.get_running_loop().time(),
                         dropped_frames=0,
                     )
-                    self._logger.info("Android mic ready deviceId=%s sampleRateHz=%s frameMs=%s", device_id, sample_rate_hz, frame_ms)
+                    self._logger.info(
+                        "Android mic ready deviceId=%s sampleRateHz=%s channels=%s frameMs=%s",
+                        device_id,
+                        sample_rate_hz,
+                        channels,
+                        frame_ms,
+                    )
                     continue
 
                 if not isinstance(msg, (bytes, bytearray)):
@@ -250,14 +273,22 @@ class HudServer:
                 if state is None:
                     # Best-effort default: 16kHz mono PCM, 20ms frames.
                     sample_rate_hz = 16000
+                    channels = 1
                     frame_ms = 20
-                    bytes_per_frame = int(sample_rate_hz * (frame_ms / 1000.0)) * 2
+                    mono_bytes_per_frame = int(sample_rate_hz * (frame_ms / 1000.0)) * 2
+                    bytes_per_frame = mono_bytes_per_frame * channels
                     state = AndroidMicState(
                         device_id="android",
                         sample_rate_hz=sample_rate_hz,
+                        channels=channels,
                         frame_ms=frame_ms,
                         bytes_per_frame=bytes_per_frame,
+                        mono_bytes_per_frame=mono_bytes_per_frame,
                         stt_q=asyncio.Queue(maxsize=200),
+                        analysis_q=asyncio.Queue(maxsize=200),
+                        last_rms=0.0,
+                        last_rms_left=0.0,
+                        last_rms_right=0.0,
                         last_seen_monotonic=asyncio.get_running_loop().time(),
                         dropped_frames=0,
                     )
@@ -273,6 +304,44 @@ class HudServer:
                         state.bytes_per_frame,
                     )
 
+                frame_in = bytes(msg)
+                frame_out: bytes | None = None
+
+                # Compute RMS and downmix to mono for STT/analysis.
+                try:
+                    pcm = np.frombuffer(frame_in, dtype=np.int16)
+                    if pcm.size == 0:
+                        continue
+                    if state.channels == 2:
+                        left = pcm[0::2]
+                        right = pcm[1::2]
+                        n = min(left.size, right.size)
+                        if n == 0:
+                            continue
+                        left = left[:n]
+                        right = right[:n]
+                        float_left = left.astype(np.float32) / 32768.0
+                        float_right = right.astype(np.float32) / 32768.0
+                        state.last_rms_left = float(np.sqrt(np.mean(float_left * float_left)))
+                        state.last_rms_right = float(np.sqrt(np.mean(float_right * float_right)))
+                        downmix = 0.5 * (float_left + float_right)
+                        state.last_rms = float(np.sqrt(np.mean(downmix * downmix)))
+
+                        mono_i32 = (left.astype(np.int32) + right.astype(np.int32)) // 2
+                        frame_out = mono_i32.astype(np.int16).tobytes()
+                    else:
+                        float_pcm = pcm.astype(np.float32) / 32768.0
+                        state.last_rms = float(np.sqrt(np.mean(float_pcm * float_pcm)))
+                        state.last_rms_left = state.last_rms
+                        state.last_rms_right = state.last_rms
+                        frame_out = frame_in
+                except Exception:
+                    self._logger.exception("Failed to process Android mic %s audio frame", state.device_id)
+                    continue
+
+                if frame_out is None:
+                    continue
+
                 if state.stt_q.full():
                     try:
                         _ = state.stt_q.get_nowait()
@@ -280,9 +349,19 @@ class HudServer:
                     except asyncio.QueueEmpty:
                         pass
                 try:
-                    state.stt_q.put_nowait(bytes(msg))
+                    state.stt_q.put_nowait(frame_out)
                 except asyncio.QueueFull:
                     state.dropped_frames += 1
+
+                if state.analysis_q.full():
+                    try:
+                        _ = state.analysis_q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                try:
+                    state.analysis_q.put_nowait(frame_out)
+                except asyncio.QueueFull:
+                    pass
         finally:
             self._android_stt.discard(conn)
             self._android_mic_by_conn.pop(conn, None)
@@ -443,9 +522,14 @@ class HudServer:
                 android_mic = {
                     "deviceId": freshest.device_id,
                     "sampleRateHz": freshest.sample_rate_hz,
+                    "channels": freshest.channels,
                     "frameMs": freshest.frame_ms,
+                    "lastRms": freshest.last_rms,
+                    "lastRmsLeft": freshest.last_rms_left,
+                    "lastRmsRight": freshest.last_rms_right,
                     "droppedFrames": freshest.dropped_frames,
                     "sttQueue": freshest.stt_q.qsize(),
+                    "analysisQueue": freshest.analysis_q.qsize(),
                     "ageS": float(max(0.0, now - freshest.last_seen_monotonic)),
                 }
             head_pose = None
@@ -592,13 +676,46 @@ class HudServer:
         """Continuously derive direction/intensity and send UI placement to Android."""
         while True:
             await asyncio.sleep(0.05)  # 20Hz
+            now = asyncio.get_running_loop().time()
+
+            source: str | None = None
+            l = 0.0
+            r = 0.0
+
+            # Prefer ESP32 directional audio if both sides are present.
             left = self._esp32_by_role.get("left")
             right = self._esp32_by_role.get("right")
-            if not left or not right:
-                continue
+            if (
+                left
+                and right
+                and (now - left.last_seen_monotonic) < 1.0
+                and (now - right.last_seen_monotonic) < 1.0
+            ):
+                source = "esp32"
+                l = max(0.0, left.last_rms)
+                r = max(0.0, right.last_rms)
 
-            l = max(0.0, left.last_rms)
-            r = max(0.0, right.last_rms)
+            # Fallback to Android phone mic (stereo preferred, mono supported).
+            if source is None and self._android_mic_by_conn:
+                mic = max(self._android_mic_by_conn.values(), key=lambda s: s.last_seen_monotonic)
+                if (now - mic.last_seen_monotonic) < 1.0:
+                    source = "android_mic"
+                    if mic.channels == 2:
+                        l = max(0.0, mic.last_rms_left)
+                        r = max(0.0, mic.last_rms_right)
+                    else:
+                        l = max(0.0, mic.last_rms)
+                        r = max(0.0, mic.last_rms)
+
+            # Last resort: one-sided ESP32 (no direction, intensity only).
+            if source is None:
+                one = left or right
+                if one is None:
+                    continue
+                source = "esp32_mono"
+                l = max(0.0, one.last_rms)
+                r = l
+
             total = l + r + 1e-6
             balance = (r - l) / total  # -1..+1
 
@@ -608,6 +725,7 @@ class HudServer:
             direction_deg = self._stabilize_direction(raw_direction_deg)
             ui = self._direction_to_ui(direction_deg, intensity)
             payload = {
+                "source": source,
                 "directionDeg": direction_deg,
                 "rawDirectionDeg": raw_direction_deg,
                 "intensity": intensity,
@@ -640,7 +758,13 @@ class HudServer:
             # Choose an analysis source (stickiness + fallback to avoid blocking).
             left = self._esp32_by_role.get("left")
             right = self._esp32_by_role.get("right")
-            if not left and not right:
+            android_mic = None
+            if self._android_mic_by_conn:
+                android_mic = max(self._android_mic_by_conn.values(), key=lambda s: s.last_seen_monotonic)
+                if (loop.time() - android_mic.last_seen_monotonic) > 1.0:
+                    android_mic = None
+
+            if not left and not right and android_mic is None:
                 await asyncio.sleep(0.05)
                 continue
             if left and right:
@@ -661,6 +785,11 @@ class HudServer:
                     break
                 except asyncio.TimeoutError:
                     continue
+            if frame_bytes is None and android_mic is not None:
+                try:
+                    frame_bytes = await asyncio.wait_for(android_mic.analysis_q.get(), timeout=0.25)
+                except asyncio.TimeoutError:
+                    frame_bytes = None
 
             if frame_bytes is None:
                 await asyncio.sleep(0.01)

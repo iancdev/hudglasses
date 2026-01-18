@@ -4,7 +4,7 @@ data class HudState(
     val serverUrl: String = "ws://192.168.1.2:8765",
     val eventsConnected: Boolean = false,
     val sttConnected: Boolean = false,
-    val micSttEnabled: Boolean = false,
+    val phoneAudioFallbackEnabled: Boolean = false,
     val glassesConnected: Boolean = false,
     val serverStatus: String = "",
     val sttStatus: String = "",
