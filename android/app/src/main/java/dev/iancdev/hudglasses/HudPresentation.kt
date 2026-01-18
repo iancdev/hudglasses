@@ -294,7 +294,7 @@ private fun rememberSmoothedRadarDots(rawDots: List<RadarDot>): List<RadarDot> {
 
 @Composable
 private fun EdgeGlow(state: HudState, dots: List<RadarDot>) {
-    val thickness: Dp = 140.dp
+    val thickness: Dp = 120.dp
 
     // Alarm overlays keep the old full-edge glow.
     val alarmGlow: Color? =
@@ -321,12 +321,12 @@ private fun EdgeGlow(state: HudState, dots: List<RadarDot>) {
             val i = intensity.coerceIn(0f, 1f)
             if (i <= 0.01f) return
 
-            // Bigger + more visible overall, but with a muted hotspot at the anchor point.
-            // (We intentionally don't peak at 0.0 so it reads as a glow, not a dot.)
-            val alpha = (0.18f + 0.70f * i).coerceIn(0f, 1f)
-            val c0 = color.copy(alpha = alpha * 0.18f)
-            val c1 = color.copy(alpha = alpha * 0.80f)
-            val c2 = color.copy(alpha = alpha * 0.35f)
+            // Slightly less intense overall, with the anchor point still the brightest.
+            // Use a slower falloff (more gradual fade) but keep the glow confined to the edge band.
+            val alpha = (0.14f + 0.55f * i).coerceIn(0f, 1f)
+            val c0 = color.copy(alpha = alpha * 0.95f)
+            val c1 = color.copy(alpha = alpha * 0.55f)
+            val c2 = color.copy(alpha = alpha * 0.30f)
             val c3 = color.copy(alpha = alpha * 0.16f)
 
             // Keep the glow confined to the edge band (thickness = t) and ensure it fades out
@@ -335,16 +335,16 @@ private fun EdgeGlow(state: HudState, dots: List<RadarDot>) {
             val fadePx = band * 0.98f
             // Larger radius => wider glow spread along the edge. The fadeStop below keeps the
             // glow confined to the edge band so it doesn't "reach inward" more than before.
-            val radius = (band * (10.0f + 26.0f * i)).coerceAtLeast(band * 8.0f)
+            val radius = (band * (8.5f + 18.0f * i)).coerceAtLeast(band * 6.0f)
             val fadeStop = (fadePx / radius).coerceIn(0.05f, 0.98f)
             val brush =
                 Brush.radialGradient(
                     colorStops =
                         arrayOf(
                             0.00f to c0,
-                            (fadeStop * 0.08f) to c1,
-                            (fadeStop * 0.22f) to c2,
-                            (fadeStop * 0.48f) to c3,
+                            (fadeStop * 0.15f) to c1,
+                            (fadeStop * 0.45f) to c2,
+                            (fadeStop * 0.75f) to c3,
                             fadeStop to Color.Transparent,
                             1.00f to Color.Transparent,
                         ),
@@ -412,20 +412,20 @@ private fun EdgeGlow(state: HudState, dots: List<RadarDot>) {
 
         // Alarm overlay last (so it's always visible).
         if (alarmGlow != null) {
-            val alpha = 0.90f
+            val alpha = 0.85f
             val c = alarmGlow.copy(alpha = alpha)
             val band = t
-            val radius = t * 32.0f
+            val radius = t * 24.0f
             val fadePx = band * 0.98f
             val fadeStop = (fadePx / radius).coerceIn(0.05f, 0.98f)
             val brush =
                 Brush.radialGradient(
                     colorStops =
                         arrayOf(
-                            0.00f to c.copy(alpha = alpha * 0.18f),
-                            (fadeStop * 0.08f) to c.copy(alpha = alpha * 0.80f),
-                            (fadeStop * 0.22f) to c.copy(alpha = alpha * 0.35f),
-                            (fadeStop * 0.48f) to c.copy(alpha = alpha * 0.16f),
+                            0.00f to c.copy(alpha = alpha * 0.95f),
+                            (fadeStop * 0.15f) to c.copy(alpha = alpha * 0.55f),
+                            (fadeStop * 0.45f) to c.copy(alpha = alpha * 0.30f),
+                            (fadeStop * 0.75f) to c.copy(alpha = alpha * 0.16f),
                             fadeStop to Color.Transparent,
                             1.00f to Color.Transparent,
                         ),
