@@ -68,6 +68,9 @@ class AndroidMicState:
 
 @dataclass(slots=True)
 class RadarTrack:
+    track_id: int
+    freq_hz: float
+    intensity: float
     world_direction_deg: float
     last_seen_monotonic: float
 
@@ -142,6 +145,13 @@ class HudServer:
         self._radar_last_compute_s: float = 0.0
         self._radar_dots: list[dict[str, Any]] = []
         self._radar_tracks: dict[int, RadarTrack] = {}
+        self._radar_next_track_id: int = 1
+        self._radar_track_freq_tol_hz: float = float(os.environ.get("RADAR_TRACK_FREQ_TOL_HZ", "250"))
+        self._radar_track_alpha_freq: float = float(os.environ.get("RADAR_TRACK_ALPHA_FREQ", "0.35"))
+        self._radar_track_alpha_intensity: float = float(os.environ.get("RADAR_TRACK_ALPHA_INTENSITY", "0.25"))
+        self._radar_track_alpha_dir: float = float(os.environ.get("RADAR_TRACK_ALPHA_DIR", "0.25"))
+        self._radar_track_decay_tau_s: float = float(os.environ.get("RADAR_TRACK_DECAY_TAU_S", "1.2"))
+        self._radar_track_min_intensity: float = float(os.environ.get("RADAR_TRACK_MIN_INTENSITY", "0.08"))
 
         radar_samples = int(16000 * self._radar_window_s)
         self._radar_buf_fl = _SampleRing(radar_samples)
@@ -909,8 +919,8 @@ class HudServer:
             await self._broadcast_events({"type": "direction.ui", **payload})
 
     def _compute_radar_dots(self, now: float) -> list[dict[str, Any]]:
-        # Compute a few frequency-peaks and estimate a direction per peak,
-        # so the HUD can show multiple potential sources on the radar.
+        # Compute a few frequency-peaks and estimate a direction per peak, then
+        # smooth/lock them into short-lived tracks so the HUD shows sustained sources.
         sample_rate_hz = 16000
 
         has_front = (now - self._radar_seen_fl) < 1.0 and (now - self._radar_seen_fr) < 1.0
@@ -1003,14 +1013,15 @@ class HudServer:
             e_br = float(np.sum(p_br[lo : hi + 1])) if p_br is not None else 0.0
             energies.append((b, e_fl, e_fr, e_bl, e_br))
 
-        max_e = max((e_fl + e_fr + e_bl + e_br) for _, e_fl, e_fr, e_bl, e_br in energies) + 1e-9
-
         pose = self._head_pose
         yaw = None
         if pose is not None and (asyncio.get_running_loop().time() - pose.last_seen_monotonic) <= 1.0:
             yaw = pose.yaw_deg
 
-        dots: list[dict[str, Any]] = []
+        max_e = max((e_fl + e_fr + e_bl + e_br) for _, e_fl, e_fr, e_bl, e_br in energies) + 1e-9
+
+        candidates: list[tuple[float, float, float]] = []
+        # (freq_hz, intensity, raw_dir_deg)
         w = 0.70710678
         for b, e_fl, e_fr, e_bl, e_br in energies:
             e_total = e_fl + e_fr + e_bl + e_br
@@ -1035,35 +1046,92 @@ class HudServer:
                 gain = float(np.clip(self._back_balance_gain_deg, 0.0, 170.0))
                 shaped = self._shape_balance(float(balance))
                 raw_dir = self._wrap_deg(180.0 - (shaped * gain))
+            candidates.append((float(freqs[b]), float(intensity), float(raw_dir)))
 
-            dir_deg = raw_dir
-            key = int(round(float(freqs[b]) / 50.0) * 50)
+        if not candidates:
+            # Fade out existing tracks.
+            return self._emit_radar_tracks(now, yaw)
+
+        # Track association: greedily match strongest candidates to existing tracks by frequency.
+        candidates.sort(key=lambda c: c[1], reverse=True)
+        used_tracks: set[int] = set()
+
+        freq_tol = max(0.0, float(self._radar_track_freq_tol_hz))
+        a_freq = float(self._radar_track_alpha_freq)
+        a_int = float(self._radar_track_alpha_intensity)
+        a_dir = float(self._radar_track_alpha_dir)
+
+        for freq_hz, intensity, raw_dir in candidates[: max(1, self._radar_max_dots)]:
+            best_id: int | None = None
+            best_df = 1e9
+            for tid, tr in self._radar_tracks.items():
+                if tid in used_tracks:
+                    continue
+                df = abs(float(tr.freq_hz) - float(freq_hz))
+                if df < best_df:
+                    best_df = df
+                    best_id = tid
+            if best_id is None or best_df > freq_tol:
+                # New track.
+                tid = self._radar_next_track_id
+                self._radar_next_track_id += 1
+                world_dir = self._wrap_deg(float(yaw) + float(raw_dir)) if yaw is not None else float(raw_dir)
+                self._radar_tracks[tid] = RadarTrack(
+                    track_id=tid,
+                    freq_hz=float(freq_hz),
+                    intensity=float(intensity),
+                    world_direction_deg=float(world_dir),
+                    last_seen_monotonic=float(now),
+                )
+                used_tracks.add(tid)
+                continue
+
+            # Update matched track with EMA smoothing.
+            tr = self._radar_tracks[best_id]
+            tr.freq_hz = self._ema(tr.freq_hz, float(freq_hz), a_freq)
+            tr.intensity = self._ema(tr.intensity, float(intensity), a_int)
             if yaw is not None:
-                world_estimate = self._wrap_deg(yaw + raw_dir)
-                track = self._radar_tracks.get(key)
-                if track is None:
-                    track = RadarTrack(world_direction_deg=world_estimate, last_seen_monotonic=now)
-                    self._radar_tracks[key] = track
-                else:
-                    track.world_direction_deg = self._lerp_angle(track.world_direction_deg, world_estimate, 0.25)
-                    track.last_seen_monotonic = now
-                dir_deg = self._wrap_deg(track.world_direction_deg - yaw)
+                world_estimate = self._wrap_deg(float(yaw) + float(raw_dir))
+                tr.world_direction_deg = self._lerp_angle(tr.world_direction_deg, world_estimate, a_dir)
+            else:
+                # No head pose: smooth in "relative" space.
+                tr.world_direction_deg = self._lerp_angle(tr.world_direction_deg, float(raw_dir), a_dir)
+            tr.last_seen_monotonic = float(now)
+            used_tracks.add(best_id)
 
-            ui = self._direction_to_ui(dir_deg, intensity)
+        return self._emit_radar_tracks(now, yaw)
+
+    def _emit_radar_tracks(self, now: float, yaw: float | None) -> list[dict[str, Any]]:
+        # Prune/decay tracks and emit the top-N by display intensity.
+        tau = max(0.1, float(self._radar_track_decay_tau_s))
+        min_i = max(0.0, float(self._radar_track_min_intensity))
+        dots: list[dict[str, Any]] = []
+
+        for tid, tr in list(self._radar_tracks.items()):
+            age = float(now) - float(tr.last_seen_monotonic)
+            if age > 3.0:
+                self._radar_tracks.pop(tid, None)
+                continue
+            decay = float(np.exp(-age / tau))
+            display_i = float(tr.intensity) * decay
+            if display_i < min_i:
+                self._radar_tracks.pop(tid, None)
+                continue
+
+            dir_deg = tr.world_direction_deg
+            if yaw is not None:
+                dir_deg = self._wrap_deg(tr.world_direction_deg - float(yaw))
+            ui = self._direction_to_ui(dir_deg, display_i)
             dots.append(
                 {
-                    "freqHz": float(freqs[b]),
-                    "directionDeg": dir_deg,
-                    "intensity": intensity,
+                    "trackId": int(tr.track_id),
+                    "freqHz": float(tr.freq_hz),
+                    "directionDeg": float(dir_deg),
+                    "intensity": float(display_i),
                     "radarX": float(ui.get("radarX", 0.0)),
                     "radarY": float(ui.get("radarY", 0.0)),
                 }
             )
-
-        # Prune stale tracks.
-        for k, tr in list(self._radar_tracks.items()):
-            if (now - tr.last_seen_monotonic) > 2.0:
-                self._radar_tracks.pop(k, None)
 
         dots.sort(key=lambda d: float(d.get("intensity", 0.0)), reverse=True)
         return dots[: max(1, self._radar_max_dots)]
@@ -1289,6 +1357,10 @@ class HudServer:
         b = float(np.clip(balance, -1.0, 1.0))
         exp = float(np.clip(self._back_balance_exp, 0.1, 1.0))
         return float(np.sign(b) * (abs(b) ** exp))
+
+    def _ema(self, prev: float, obs: float, alpha: float) -> float:
+        a = float(np.clip(alpha, 0.0, 1.0))
+        return (1.0 - a) * float(prev) + a * float(obs)
 
     async def _check_keywords(self, text: str) -> None:
         if not self._keywords:

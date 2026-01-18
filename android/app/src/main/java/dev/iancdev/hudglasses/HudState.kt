@@ -14,6 +14,8 @@ data class HudState(
     val eventsConnected: Boolean = false,
     val sttConnected: Boolean = false,
     val phoneAudioFallbackEnabled: Boolean = false,
+    val phoneHapticsEnabled: Boolean = true,
+    val phoneDirectionHapticsEnabled: Boolean = false,
     val phoneMicSource: Int = MediaRecorder.AudioSource.MIC, // -1 = auto
     val phoneMicActiveSource: Int? = null,
     val phoneMicChannels: Int = 0,
