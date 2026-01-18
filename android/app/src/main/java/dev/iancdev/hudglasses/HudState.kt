@@ -73,6 +73,7 @@ data class HudState(
     val hudShowRadar: Boolean = true,
     val hudShowDebugText: Boolean = false,
     val hudShowSubtitles: Boolean = true,
+    val hudShowSplash: Boolean = false,
     val hudWidthPx: Int? = null,
     val hudHeightPx: Int? = null,
     val hudDensityDpi: Int? = null,

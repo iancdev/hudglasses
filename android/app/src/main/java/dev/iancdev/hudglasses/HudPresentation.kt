@@ -100,6 +100,10 @@ private fun HudUi() {
     val state by HudStore.state.collectAsState()
     val smoothedDots = rememberSmoothedRadarDots(state.radarDots)
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        if (state.hudShowSplash) {
+            SplashScreen()
+            return@Box
+        }
         if (state.hudShowRadar) {
             Radar(state, smoothedDots)
         }
@@ -114,6 +118,21 @@ private fun HudUi() {
         if (state.hudShowDebugText) {
             StatusOverlay(state)
         }
+    }
+}
+
+@Composable
+private fun SplashScreen() {
+    Box(modifier = Modifier.fillMaxSize()) {
+        Text(
+            text = "HUDson",
+            color = Color.White,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Clip,
+            style = MaterialTheme.typography.displayLarge.copy(fontSize = 96.sp, fontWeight = FontWeight.Black),
+            modifier = Modifier.align(Alignment.Center),
+        )
     }
 }
 

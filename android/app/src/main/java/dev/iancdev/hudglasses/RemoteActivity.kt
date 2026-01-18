@@ -494,6 +494,13 @@ private fun RemoteUi(
 
         Text("HUD elements (on glasses)")
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Splash Screen")
+            Switch(
+                checked = state.hudShowSplash,
+                onCheckedChange = { enabled -> HudStore.update { it.copy(hudShowSplash = enabled) } },
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Glow")
             Switch(
                 checked = state.hudShowGlow,
