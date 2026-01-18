@@ -529,6 +529,7 @@ private fun RemoteUi(
 
         Text("Fire alarm: ${state.fireAlarm}")
         Text("Car horn: ${state.carHorn}")
+        Text("Siren: ${state.siren}")
         if (state.keywordAlert.isNotBlank()) {
             Text("Keyword alert: ${state.keywordAlert}")
         }

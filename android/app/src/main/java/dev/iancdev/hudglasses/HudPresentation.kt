@@ -169,6 +169,7 @@ private fun Radar(state: HudState, dots: List<RadarDot>) {
         val dot = Offset(center.x + state.radarX * radius, center.y - state.radarY * radius)
         val dotColor = when {
             state.fireAlarm != "idle" -> Color.Red
+            state.siren != "idle" -> Color.Cyan
             state.carHorn != "idle" -> Color.Yellow
             else -> Color.White
         }
@@ -331,6 +332,7 @@ private fun EdgeGlow(state: HudState, dots: List<RadarDot>) {
     val alarmGlow: Color? =
         when {
             state.fireAlarm != "idle" -> Color.Red
+            state.siren != "idle" -> Color.Cyan
             state.carHorn != "idle" -> Color.Yellow
             else -> null
         }

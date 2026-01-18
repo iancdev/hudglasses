@@ -187,8 +187,9 @@ class WsController(
         when (obj.optString("type")) {
             "status" -> handleStatus(obj)
             "direction.ui" -> handleDirection(obj)
-            "alarm.fire" -> handleAlarm(obj, isFire = true)
-            "alarm.car_horn" -> handleAlarm(obj, isFire = false)
+            "alarm.fire" -> handleAlarm(obj, AlarmType.FIRE)
+            "alarm.car_horn" -> handleAlarm(obj, AlarmType.CAR_HORN)
+            "alarm.siren" -> handleAlarm(obj, AlarmType.SIREN)
             "alert.keyword" -> handleKeyword(obj)
         }
         onEvents(HudEvent.EventsMessage(obj))
@@ -243,11 +244,19 @@ class WsController(
         val esp32 = obj.optJSONObject("esp32")
         val hasLeft = esp32?.has("left") == true
         val hasRight = esp32?.has("right") == true
+
+        val alarms = obj.optJSONObject("alarms")
+        val fireActive = alarms?.optBoolean("fireActive", false) == true
+        val hornActive = alarms?.optBoolean("carHornActive", false) == true
+        val sirenActive = alarms?.optBoolean("sirenActive", false) == true
         HudStore.update {
             it.copy(
                 serverStatus = obj.optString("server", it.serverStatus),
                 esp32ConnectedLeft = hasLeft,
                 esp32ConnectedRight = hasRight,
+                fireAlarm = if (fireActive) "active" else "idle",
+                carHorn = if (hornActive) "active" else "idle",
+                siren = if (sirenActive) "active" else "idle",
             )
         }
     }
@@ -284,7 +293,13 @@ class WsController(
         }
     }
 
-    private fun handleAlarm(obj: JSONObject, isFire: Boolean) {
+    private enum class AlarmType {
+        FIRE,
+        CAR_HORN,
+        SIREN,
+    }
+
+    private fun handleAlarm(obj: JSONObject, type: AlarmType) {
         val stateRaw = obj.optString("state", "ongoing")
         val state = when (stateRaw) {
             "started", "ongoing" -> "active"
@@ -292,7 +307,11 @@ class WsController(
             else -> stateRaw
         }
         HudStore.update {
-            if (isFire) it.copy(fireAlarm = state) else it.copy(carHorn = state)
+            when (type) {
+                AlarmType.FIRE -> it.copy(fireAlarm = state)
+                AlarmType.CAR_HORN -> it.copy(carHorn = state)
+                AlarmType.SIREN -> it.copy(siren = state)
+            }
         }
     }
 

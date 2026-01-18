@@ -50,6 +50,7 @@ data class HudState(
     val glowStrength: Float = 0f,
     val fireAlarm: String = "idle",
     val carHorn: String = "idle",
+    val siren: String = "idle",
     val subtitlePartial: String = "",
     val subtitleLines: List<String> = emptyList(),
     val hudWidthPx: Int? = null,

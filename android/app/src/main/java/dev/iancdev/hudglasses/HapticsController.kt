@@ -60,6 +60,9 @@ class HapticsController(
             "alarm.car_horn" -> if (obj.optString("state") == "started") {
                 buzz(pattern = longArrayOf(0, 200, 100, 200, 100, 200))
             }
+            "alarm.siren" -> if (obj.optString("state") == "started") {
+                buzz(pattern = longArrayOf(0, 450, 120, 450, 120, 700))
+            }
             "alert.keyword" -> {
                 buzz(pattern = longArrayOf(0, 120, 80, 120, 80, 120))
             }
