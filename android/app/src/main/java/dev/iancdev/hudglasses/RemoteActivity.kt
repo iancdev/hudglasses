@@ -146,6 +146,8 @@ class RemoteActivity : ComponentActivity() {
                 }
             }
         }
+
+        maybeRestorePhoneAudioFallback()
     }
 
     override fun onResume() {
@@ -240,6 +242,15 @@ class RemoteActivity : ComponentActivity() {
                         .put("frameMs", started.frameMs),
                 )
         )
+    }
+
+    private fun maybeRestorePhoneAudioFallback() {
+        if (!HudStore.state.value.phoneAudioFallbackEnabled) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            HudStore.update { it.copy(phoneAudioFallbackEnabled = false) }
+            return
+        }
+        enablePhoneAudioFallbackInternal()
     }
 }
 

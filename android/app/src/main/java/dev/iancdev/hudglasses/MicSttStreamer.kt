@@ -26,9 +26,10 @@ class MicSttStreamer(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var record: AudioRecord? = null
     private var job: Job? = null
+    private var lastConfig: StartConfig? = null
 
     fun start(sampleRateHz: Int = 16000, frameMs: Int = 20, preferStereo: Boolean = true): StartConfig? {
-        if (job != null) return null
+        if (job != null) return lastConfig
 
         fun tryStart(source: Int, channelConfig: Int, channels: Int): StartConfig? {
             val bytesPerFrame = (sampleRateHz * frameMs / 1000) * 2 * channels
@@ -95,6 +96,7 @@ class MicSttStreamer(
             }
         if (stereoConfig != null) {
             Log.i("MicStt", "Started mic streaming stereo @ ${sampleRateHz}Hz")
+            lastConfig = stereoConfig
             return stereoConfig
         }
 
@@ -106,6 +108,7 @@ class MicSttStreamer(
             )
         if (monoConfig != null) {
             Log.i("MicStt", "Started mic streaming mono @ ${sampleRateHz}Hz")
+            lastConfig = monoConfig
             return monoConfig
         }
 
@@ -121,6 +124,7 @@ class MicSttStreamer(
             runCatching { it.release() }
         }
         record = null
+        lastConfig = null
     }
 
     fun close() {
