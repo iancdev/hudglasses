@@ -132,8 +132,9 @@ private fun StatusOverlay(state: HudState) {
 @Composable
 private fun Radar(state: HudState, dots: List<RadarDot>) {
     Canvas(modifier = Modifier.fillMaxSize()) {
-        val center = Offset(size.width * 0.5f, size.height * 0.35f)
         val radius = size.minDimension * 0.12f
+        val pad = 24.dp.toPx()
+        val center = Offset(pad + radius, pad + radius)
         drawCircle(color = Color(0xFF2A2A2A), radius = radius, center = center)
 
         for (d in dots) {
