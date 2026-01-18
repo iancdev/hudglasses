@@ -11,10 +11,50 @@ This repo is currently **docs-first** (hackathon planning + protocols). Key path
 When code lands, keep modules separated (recommended): `android/` (HUD + phone remote), `server/` (laptop processing), `esp32/` (firmware).
 
 ## Build, Test, and Development Commands
-No build/test scripts are checked in yet (documentation-only repo today). Useful commands:
+Useful commands:
 - `ls docs/` — list current specs/contracts.
-- `git diff` — review doc changes before committing.
+- `git diff` — review changes before committing.
 - `git log --oneline -n 20` — see recent commit message patterns.
+
+### Android (CLI)
+This project has two Android product flavors:
+- `nosdk` — builds/runs without Viture SDK; IMU/head tracking disabled.
+- `viture` — builds/runs with Viture SDK AAR; IMU/head tracking enabled.
+
+Prereqs:
+- JDK 17 (recommended: `brew install openjdk@17`)
+  - Note: JDK 25 currently fails the Gradle/Kotlin build with `IllegalArgumentException: 25.0.1`.
+- Android SDK with:
+  - Platform 34
+  - Build-Tools 34.x
+  - Platform-Tools
+- For `viture` flavor: `android/app/libs/VITURE-SDK-1.0.7.aar` present (not committed).
+
+Commands:
+- `export JAVA_HOME="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"`
+- `export ANDROID_SDK_ROOT="$HOME/Library/Android/sdk"`
+- `cd android`
+- `cat > local.properties <<EOF
+sdk.dir=$ANDROID_SDK_ROOT
+EOF`
+- Build APKs:
+  - `./gradlew :app:assembleNosdkDebug`
+  - `./gradlew :app:assembleVitureDebug`
+- Install to a USB-connected device:
+  - `adb devices -l`
+  - `./gradlew :app:installNosdkDebug`
+  - `./gradlew :app:installVitureDebug`
+
+Notes:
+- `:app:installDebug` is ambiguous because there are multiple flavors; use the full task name above.
+- `android/local.properties` is intentionally gitignored (local-only SDK path).
+
+### Android Debug Logs (Logcat)
+When the app crashes on startup, grab logs via:
+- `adb devices -l`
+- `adb logcat -c`
+- Start the app: `adb shell am start -n dev.iancdev.hudglasses/.RemoteActivity`
+- Tail crash output: `adb logcat | rg -n \"FATAL EXCEPTION|AndroidRuntime|dev\\.iancdev\\.hudglasses|VitureImu|Wristband\"`
 
 When adding Android/server code, include module-specific commands in that module’s README (e.g., `android/README.md`) and update this file.
 
@@ -37,4 +77,3 @@ PRs should include:
 
 ## Security & Configuration Tips
 Do **not** commit secrets (e.g., `ELEVENLABS_API_KEY`), tokens, or Wi‑Fi credentials. Keep local config in ignored files (add to `.gitignore` as new modules are introduced).
-
