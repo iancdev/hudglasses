@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -335,7 +336,7 @@ private fun EdgeGlow(state: HudState, dots: List<RadarDot>) {
             val fadePx = band * 0.98f
             // Larger radius => wider glow spread along the edge. The fadeStop below keeps the
             // glow confined to the edge band so it doesn't "reach inward" more than before.
-            val radius = (band * (10.5f + 24.0f * i)).coerceAtLeast(band * 8.0f)
+            val radius = (band * (7.0f + 14.0f * i)).coerceAtLeast(band * 5.0f)
             val fadeStop = (fadePx / radius).coerceIn(0.05f, 0.98f)
             val brush =
                 Brush.radialGradient(
@@ -353,21 +354,35 @@ private fun EdgeGlow(state: HudState, dots: List<RadarDot>) {
                     radius = radius,
                 )
 
+            val ovalScale = (1.8f + 0.7f * i).coerceIn(1.8f, 2.5f)
+            val scaleX = if (edge == "top" || edge == "bottom") ovalScale else 1f
+            val scaleY = if (edge == "left" || edge == "right") ovalScale else 1f
+
             when (edge) {
-                "left" -> drawRect(brush = brush, topLeft = Offset(0f, 0f), size = androidx.compose.ui.geometry.Size(t, h))
+                "left" ->
+                    withTransform({ scale(scaleX = scaleX, scaleY = scaleY, pivot = center) }) {
+                        drawRect(brush = brush, topLeft = Offset(0f, 0f), size = androidx.compose.ui.geometry.Size(t, h))
+                    }
                 "right" ->
-                    drawRect(
-                        brush = brush,
-                        topLeft = Offset(w - t, 0f),
-                        size = androidx.compose.ui.geometry.Size(t, h),
-                    )
+                    withTransform({ scale(scaleX = scaleX, scaleY = scaleY, pivot = center) }) {
+                        drawRect(
+                            brush = brush,
+                            topLeft = Offset(w - t, 0f),
+                            size = androidx.compose.ui.geometry.Size(t, h),
+                        )
+                    }
                 "bottom" ->
-                    drawRect(
-                        brush = brush,
-                        topLeft = Offset(0f, h - t),
-                        size = androidx.compose.ui.geometry.Size(w, t),
-                    )
-                else -> drawRect(brush = brush, topLeft = Offset(0f, 0f), size = androidx.compose.ui.geometry.Size(w, t))
+                    withTransform({ scale(scaleX = scaleX, scaleY = scaleY, pivot = center) }) {
+                        drawRect(
+                            brush = brush,
+                            topLeft = Offset(0f, h - t),
+                            size = androidx.compose.ui.geometry.Size(w, t),
+                        )
+                    }
+                else ->
+                    withTransform({ scale(scaleX = scaleX, scaleY = scaleY, pivot = center) }) {
+                        drawRect(brush = brush, topLeft = Offset(0f, 0f), size = androidx.compose.ui.geometry.Size(w, t))
+                    }
             }
         }
 
@@ -416,7 +431,7 @@ private fun EdgeGlow(state: HudState, dots: List<RadarDot>) {
             val alpha = 0.82f
             val c = alarmGlow.copy(alpha = alpha)
             val band = t
-            val radius = t * 26.0f
+            val radius = t * 19.0f
             val fadePx = band * 0.98f
             val fadeStop = (fadePx / radius).coerceIn(0.05f, 0.98f)
             val brush =
@@ -434,7 +449,10 @@ private fun EdgeGlow(state: HudState, dots: List<RadarDot>) {
                     center = Offset(w * 0.5f, 0f),
                     radius = radius,
                 )
-            drawRect(brush = brush, topLeft = Offset(0f, 0f), size = androidx.compose.ui.geometry.Size(w, t))
+            val center = Offset(w * 0.5f, 0f)
+            withTransform({ scale(scaleX = 2.2f, scaleY = 1f, pivot = center) }) {
+                drawRect(brush = brush, topLeft = Offset(0f, 0f), size = androidx.compose.ui.geometry.Size(w, t))
+            }
         }
     }
 }
