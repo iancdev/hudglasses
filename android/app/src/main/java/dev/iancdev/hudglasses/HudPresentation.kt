@@ -4,7 +4,9 @@ import android.app.Presentation
 import android.content.Context
 import android.os.Bundle
 import android.view.Display
+import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -29,15 +31,43 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ViewModelStoreOwner
+import androidx.savedstate.SavedStateRegistryOwner
 
-class HudPresentation(context: Context, display: Display) : Presentation(context, display) {
+class HudPresentation(
+    context: Context,
+    display: Display,
+    private val owner: ComponentActivity,
+) : Presentation(context, display) {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val compose = ComposeView(context).apply {
+            // These ViewTree* helpers are not in the public API surface on some builds,
+            // so we invoke them reflectively to keep the HUD-on-external-display stable.
+            setViewTreeOwnersReflective(this, owner)
             setContent { HudUi() }
         }
         setContentView(compose, android.view.ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+    }
+}
+
+private fun setViewTreeOwnersReflective(view: View, owner: ComponentActivity) {
+    runCatching {
+        val clazz = Class.forName("androidx.lifecycle.ViewTreeLifecycleOwner")
+        val method = clazz.getMethod("set", View::class.java, LifecycleOwner::class.java)
+        method.invoke(null, view, owner)
+    }
+    runCatching {
+        val clazz = Class.forName("androidx.savedstate.ViewTreeSavedStateRegistryOwner")
+        val method = clazz.getMethod("set", View::class.java, SavedStateRegistryOwner::class.java)
+        method.invoke(null, view, owner)
+    }
+    runCatching {
+        val clazz = Class.forName("androidx.lifecycle.ViewTreeViewModelStoreOwner")
+        val method = clazz.getMethod("set", View::class.java, ViewModelStoreOwner::class.java)
+        method.invoke(null, view, owner)
     }
 }
 

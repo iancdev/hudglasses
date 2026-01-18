@@ -37,9 +37,9 @@ class RemoteActivity : ComponentActivity() {
     private lateinit var hapticsController: HapticsController
 
     private val displayListener = object : DisplayManager.DisplayListener {
-        override fun onDisplayAdded(displayId: Int) = refreshHudDisplay()
-        override fun onDisplayRemoved(displayId: Int) = refreshHudDisplay()
-        override fun onDisplayChanged(displayId: Int) = refreshHudDisplay()
+        override fun onDisplayAdded(displayId: Int) = runOnUiThread { refreshHudDisplay() }
+        override fun onDisplayRemoved(displayId: Int) = runOnUiThread { refreshHudDisplay() }
+        override fun onDisplayChanged(displayId: Int) = runOnUiThread { refreshHudDisplay() }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -150,7 +150,7 @@ class RemoteActivity : ComponentActivity() {
             return
         }
         hudPresentation?.dismiss()
-        hudPresentation = HudPresentation(this, external).also { it.show() }
+        hudPresentation = HudPresentation(this, external, owner = this).also { it.show() }
     }
 }
 
