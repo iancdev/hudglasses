@@ -4,9 +4,12 @@ import asyncio
 import base64
 import json
 import logging
+import os
+import ssl
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable
 
+import certifi
 import websockets
 
 
@@ -52,9 +55,25 @@ class ElevenLabsRealtimeStt:
     ) -> None:
         uri = self._build_uri()
         self._logger.info("Connecting ElevenLabs STT: %s", uri)
+
+        ssl_ctx: ssl.SSLContext | None = None
+        if os.environ.get("ELEVENLABS_INSECURE_SSL") == "1":
+            self._logger.warning("ELEVENLABS_INSECURE_SSL=1; TLS verification disabled (unsafe)")
+            ssl_ctx = ssl._create_unverified_context()
+        else:
+            cafile = (os.environ.get("SSL_CERT_FILE") or os.environ.get("REQUESTS_CA_BUNDLE") or "").strip()
+            if cafile:
+                self._logger.info("Using TLS CA bundle from env: %s", cafile)
+                ssl_ctx = ssl.create_default_context(cafile=cafile)
+            else:
+                ca = certifi.where()
+                self._logger.info("Using certifi CA bundle: %s", ca)
+                ssl_ctx = ssl.create_default_context(cafile=ca)
+
         async with websockets.connect(
             uri,
             additional_headers={"xi-api-key": self._cfg.api_key},
+            ssl=ssl_ctx,
             max_size=2 * 1024 * 1024,
             ping_interval=20,
             ping_timeout=20,
@@ -95,4 +114,3 @@ class ElevenLabsRealtimeStt:
             parts.append("include_timestamps=true")
         query = ("?" + "&".join(parts)) if parts else ""
         return f"wss://{self._cfg.host}/v1/speech-to-text/realtime{query}"
-
