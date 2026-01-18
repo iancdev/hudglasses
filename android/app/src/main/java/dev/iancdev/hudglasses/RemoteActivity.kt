@@ -533,7 +533,7 @@ private fun phoneMicSourceOptions(): List<MicSourceOption> {
         MicSourceOption(MediaRecorder.AudioSource.VOICE_RECOGNITION, "VOICE_RECOGNITION (${MediaRecorder.AudioSource.VOICE_RECOGNITION})"),
         MicSourceOption(MediaRecorder.AudioSource.UNPROCESSED, "UNPROCESSED (${MediaRecorder.AudioSource.UNPROCESSED})"),
         MicSourceOption(MediaRecorder.AudioSource.VOICE_COMMUNICATION, "VOICE_COMMUNICATION (${MediaRecorder.AudioSource.VOICE_COMMUNICATION})"),
-        MicSourceOption(MediaRecorder.AudioSource.MIC, "MICROPHONE (${MediaRecorder.AudioSource.MIC})"),
+        MicSourceOption(MediaRecorder.AudioSource.MIC, "MIC (${MediaRecorder.AudioSource.MIC})"),
         MicSourceOption(MediaRecorder.AudioSource.CAMCORDER, "CAMCORDER (${MediaRecorder.AudioSource.CAMCORDER})"),
         MicSourceOption(MediaRecorder.AudioSource.DEFAULT, "DEFAULT (${MediaRecorder.AudioSource.DEFAULT})"),
     )
@@ -546,7 +546,7 @@ private fun phoneMicSourceLabel(source: Int?): String {
         MediaRecorder.AudioSource.VOICE_RECOGNITION -> "VOICE_RECOGNITION"
         MediaRecorder.AudioSource.UNPROCESSED -> "UNPROCESSED"
         MediaRecorder.AudioSource.VOICE_COMMUNICATION -> "VOICE_COMMUNICATION"
-        MediaRecorder.AudioSource.MIC -> "MICROPHONE"
+        MediaRecorder.AudioSource.MIC -> "MIC"
         MediaRecorder.AudioSource.CAMCORDER -> "CAMCORDER"
         MediaRecorder.AudioSource.DEFAULT -> "DEFAULT"
         else -> "src_$source"

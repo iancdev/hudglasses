@@ -2,6 +2,7 @@ package dev.iancdev.hudglasses
 
 import android.app.Presentation
 import android.content.Context
+import android.graphics.Color as AndroidColor
 import android.os.Bundle
 import android.view.Display
 import android.view.View
@@ -125,6 +126,15 @@ private fun Radar(state: HudState) {
         val center = Offset(size.width * 0.5f, size.height * 0.35f)
         val radius = size.minDimension * 0.12f
         drawCircle(color = Color(0xFF2A2A2A), radius = radius, center = center)
+
+        for (d in state.radarDots) {
+            val dot = Offset(center.x + d.radarX * radius, center.y - d.radarY * radius)
+            val dotColor = radarDotColor(d.freqHz)
+            val alpha = (0.25f + 0.75f * d.intensity).coerceIn(0f, 1f)
+            val r = 6f + (10f * d.intensity).coerceIn(0f, 10f)
+            drawCircle(color = dotColor, radius = r, center = dot, alpha = alpha)
+        }
+
         val dot = Offset(center.x + state.radarX * radius, center.y - state.radarY * radius)
         val dotColor = when {
             state.fireAlarm != "idle" -> Color.Red
@@ -133,6 +143,13 @@ private fun Radar(state: HudState) {
         }
         drawCircle(color = dotColor, radius = 10f, center = dot, alpha = 0.95f)
     }
+}
+
+private fun radarDotColor(freqHz: Float): Color {
+    val t = ((freqHz - 200f) / (4000f - 200f)).coerceIn(0f, 1f)
+    val hue = 240f * (1f - t) // blue -> red
+    val argb = AndroidColor.HSVToColor(floatArrayOf(hue, 0.85f, 1f))
+    return Color(argb)
 }
 
 @Composable

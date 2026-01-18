@@ -86,7 +86,7 @@ class WsController(
     }
 
     private fun scheduleReconnect() {
-        val base = targetBaseUrl ?: return
+        if (targetBaseUrl == null) return
         if (!shouldConnect) return
         if (reconnectFuture?.isDone == false) return
 
@@ -252,12 +252,30 @@ class WsController(
     }
 
     private fun handleDirection(obj: JSONObject) {
+        val dots =
+            obj.optJSONArray("radarDots")?.let { arr ->
+                buildList {
+                    for (i in 0 until arr.length()) {
+                        val d = arr.optJSONObject(i) ?: continue
+                        add(
+                            RadarDot(
+                                freqHz = d.optDouble("freqHz", 0.0).toFloat(),
+                                radarX = d.optDouble("radarX", 0.0).toFloat(),
+                                radarY = d.optDouble("radarY", 0.0).toFloat(),
+                                intensity = d.optDouble("intensity", 0.0).toFloat(),
+                            )
+                        )
+                    }
+                }
+            } ?: emptyList()
+
         HudStore.update {
             it.copy(
                 directionDeg = obj.optDouble("directionDeg", 0.0).toFloat(),
                 intensity = obj.optDouble("intensity", 0.0).toFloat(),
                 radarX = obj.optDouble("radarX", 0.0).toFloat(),
                 radarY = obj.optDouble("radarY", 0.0).toFloat(),
+                radarDots = dots,
                 glowEdge = obj.optString("glowEdge", "top"),
                 glowStrength = obj.optDouble("glowStrength", 0.0).toFloat(),
             )

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections import deque
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -65,6 +66,41 @@ class AndroidMicState:
     dropped_frames: int
 
 
+@dataclass(slots=True)
+class RadarTrack:
+    world_direction_deg: float
+    last_seen_monotonic: float
+
+
+class _SampleRing:
+    def __init__(self, max_samples: int) -> None:
+        self._max_samples = max(0, int(max_samples))
+        self._parts: deque[np.ndarray] = deque()
+        self._total_samples = 0
+
+    def append(self, samples: np.ndarray) -> None:
+        if self._max_samples <= 0:
+            return
+        if samples.size == 0:
+            return
+        if samples.dtype != np.float32:
+            samples = samples.astype(np.float32, copy=False)
+        if samples.size > self._max_samples:
+            samples = samples[-self._max_samples :]
+        self._parts.append(samples)
+        self._total_samples += int(samples.size)
+        while self._total_samples > self._max_samples and self._parts:
+            popped = self._parts.popleft()
+            self._total_samples -= int(popped.size)
+
+    def get(self) -> np.ndarray:
+        if self._total_samples <= 0 or not self._parts:
+            return np.zeros((0,), dtype=np.float32)
+        if len(self._parts) == 1:
+            return self._parts[0]
+        return np.concatenate(list(self._parts)).astype(np.float32, copy=False)
+
+
 class HudServer:
     def __init__(self, host: str, port: int, log_level: str = "INFO") -> None:
         setup_logging(log_level)
@@ -95,6 +131,25 @@ class HudServer:
         self._direction_gain_quad: float = float(os.environ.get("DIRECTION_GAIN_QUAD", "4.5"))
         self._direction_gain_lr: float = float(os.environ.get("DIRECTION_GAIN_LR", "6.0"))
         self._direction_gain_mono: float = float(os.environ.get("DIRECTION_GAIN_MONO", "6.0"))
+
+        # Frequency-based radar dots (hackathon-friendly multi-source visualization).
+        self._radar_window_s: float = float(os.environ.get("RADAR_WINDOW_S", "0.5"))
+        self._radar_max_dots: int = int(os.environ.get("RADAR_MAX_DOTS", "3"))
+        self._radar_min_freq_hz: float = float(os.environ.get("RADAR_MIN_FREQ_HZ", "200"))
+        self._radar_max_freq_hz: float = float(os.environ.get("RADAR_MAX_FREQ_HZ", "4000"))
+        self._radar_last_compute_s: float = 0.0
+        self._radar_dots: list[dict[str, Any]] = []
+        self._radar_tracks: dict[int, RadarTrack] = {}
+
+        radar_samples = int(16000 * self._radar_window_s)
+        self._radar_buf_fl = _SampleRing(radar_samples)
+        self._radar_buf_fr = _SampleRing(radar_samples)
+        self._radar_buf_bl = _SampleRing(radar_samples)
+        self._radar_buf_br = _SampleRing(radar_samples)
+        self._radar_seen_fl: float = 0.0
+        self._radar_seen_fr: float = 0.0
+        self._radar_seen_bl: float = 0.0
+        self._radar_seen_br: float = 0.0
 
         self._keywords: list[str] = []
         self._keyword_cooldown_s: float = float(os.environ.get("KEYWORD_COOLDOWN_S", "5"))
@@ -343,21 +398,31 @@ class HudServer:
                             continue
                         left = left[:n]
                         right = right[:n]
-                        float_left = left.astype(np.float32) / 32768.0
-                        float_right = right.astype(np.float32) / 32768.0
+                        float_left = left.astype(np.float32) / np.float32(32768.0)
+                        float_right = right.astype(np.float32) / np.float32(32768.0)
                         state.last_rms_left = float(np.sqrt(np.mean(float_left * float_left)))
                         state.last_rms_right = float(np.sqrt(np.mean(float_right * float_right)))
                         downmix = 0.5 * (float_left + float_right)
                         state.last_rms = float(np.sqrt(np.mean(downmix * downmix)))
 
+                        self._radar_buf_bl.append(float_left)
+                        self._radar_buf_br.append(float_right)
+                        self._radar_seen_bl = state.last_seen_monotonic
+                        self._radar_seen_br = state.last_seen_monotonic
+
                         mono_i32 = (left.astype(np.int32) + right.astype(np.int32)) // 2
                         frame_out = mono_i32.astype(np.int16).tobytes()
                     else:
-                        float_pcm = pcm.astype(np.float32) / 32768.0
+                        float_pcm = pcm.astype(np.float32) / np.float32(32768.0)
                         state.last_rms = float(np.sqrt(np.mean(float_pcm * float_pcm)))
                         state.last_rms_left = state.last_rms
                         state.last_rms_right = state.last_rms
                         frame_out = frame_in
+
+                        self._radar_buf_bl.append(float_pcm)
+                        self._radar_buf_br.append(float_pcm)
+                        self._radar_seen_bl = state.last_seen_monotonic
+                        self._radar_seen_br = state.last_seen_monotonic
                 except Exception:
                     self._logger.exception("Failed to process Android mic %s audio frame", state.device_id)
                     continue
@@ -466,8 +531,14 @@ class HudServer:
                 try:
                     pcm = np.frombuffer(msg, dtype=np.int16)
                     if pcm.size:
-                        float_pcm = pcm.astype(np.float32) / 32768.0
+                        float_pcm = pcm.astype(np.float32) / np.float32(32768.0)
                         state.last_rms = float(np.sqrt(np.mean(float_pcm * float_pcm)))
+                        if state.role == "left":
+                            self._radar_buf_fl.append(float_pcm)
+                            self._radar_seen_fl = state.last_seen_monotonic
+                        elif state.role == "right":
+                            self._radar_buf_fr.append(float_pcm)
+                            self._radar_seen_fr = state.last_seen_monotonic
                 except Exception:
                     self._logger.exception("Failed to compute RMS for ESP32 %s role=%s", state.device_id, state.role)
 
@@ -702,6 +773,10 @@ class HudServer:
             await asyncio.sleep(0.05)  # 20Hz
             now = asyncio.get_running_loop().time()
 
+            if (now - self._radar_last_compute_s) >= 0.2:
+                self._radar_last_compute_s = now
+                self._radar_dots = self._compute_radar_dots(now)
+
             source: str | None = None
             raw_direction_deg: float | None = None
             intensity: float | None = None
@@ -757,14 +832,28 @@ class HudServer:
                 source = "back"
             else:
                 # Last resort: use whichever single mic is available (no direction, intensity only).
-                one = (front_left or front_right) or mic
-                if one is None:
+                front_left_fresh = front_left is not None and (now - front_left.last_seen_monotonic) < 1.0
+                front_right_fresh = front_right is not None and (now - front_right.last_seen_monotonic) < 1.0
+
+                if mic is not None:
+                    # Phone worn behind the neck: if we're forced into mono, treat it as "back".
+                    one = mic
+                    raw_direction_deg = 180.0
+                    source = "back"
+                elif front_left_fresh:
+                    one = front_left
+                    raw_direction_deg = 0.0
+                    source = "front"
+                elif front_right_fresh:
+                    one = front_right
+                    raw_direction_deg = 0.0
+                    source = "front"
+                else:
                     continue
-                raw_direction_deg = 0.0
+
                 one_rms = float(getattr(one, "last_rms", 0.0))
                 one_rms = max(0.0, one_rms - self._direction_noise_floor)
                 intensity = float(np.clip(one_rms * self._direction_gain_mono, 0.0, 1.0))
-                source = "mono"
 
             if raw_direction_deg is None or intensity is None or source is None:
                 continue
@@ -776,6 +865,7 @@ class HudServer:
                 "directionDeg": direction_deg,
                 "rawDirectionDeg": raw_direction_deg,
                 "intensity": intensity,
+                "radarDots": self._radar_dots,
                 **ui,
             }
             self._latest_direction_payload = payload
@@ -792,6 +882,164 @@ class HudServer:
                 ui=ui,
             )
             await self._broadcast_events({"type": "direction.ui", **payload})
+
+    def _compute_radar_dots(self, now: float) -> list[dict[str, Any]]:
+        # Compute a few frequency-peaks and estimate a direction per peak,
+        # so the HUD can show multiple potential sources on the radar.
+        sample_rate_hz = 16000
+
+        has_front = (now - self._radar_seen_fl) < 1.0 and (now - self._radar_seen_fr) < 1.0
+        has_back = (now - self._radar_seen_bl) < 1.0 and (now - self._radar_seen_br) < 1.0
+
+        if not has_front and not has_back:
+            return []
+
+        fl = self._radar_buf_fl.get() if has_front else None
+        fr = self._radar_buf_fr.get() if has_front else None
+        bl = self._radar_buf_bl.get() if has_back else None
+        br = self._radar_buf_br.get() if has_back else None
+
+        arrays = [a for a in (fl, fr, bl, br) if a is not None and a.size > 0]
+        if not arrays:
+            return []
+
+        n = int(min(a.size for a in arrays))
+        if n < 2048:
+            return []
+
+        # Use the most recent aligned window across available channels.
+        if fl is not None:
+            fl = fl[-n:]
+        if fr is not None:
+            fr = fr[-n:]
+        if bl is not None:
+            bl = bl[-n:]
+        if br is not None:
+            br = br[-n:]
+
+        window = np.hanning(n).astype(np.float32)
+
+        def power(x: np.ndarray) -> np.ndarray:
+            x = x.astype(np.float32, copy=False)
+            x = x - float(np.mean(x))
+            spec = np.fft.rfft(x * window)
+            return (spec.real * spec.real + spec.imag * spec.imag).astype(np.float32)
+
+        p_fl = power(fl) if fl is not None else None
+        p_fr = power(fr) if fr is not None else None
+        p_bl = power(bl) if bl is not None else None
+        p_br = power(br) if br is not None else None
+
+        ref = next((p for p in (p_fl, p_fr, p_bl, p_br) if p is not None), None)
+        if ref is None:
+            return []
+        total = np.zeros_like(ref)
+        for p in (p_fl, p_fr, p_bl, p_br):
+            if p is not None:
+                total += p
+
+        freqs = np.fft.rfftfreq(n, d=1.0 / sample_rate_hz)
+        mask = (freqs >= self._radar_min_freq_hz) & (freqs <= self._radar_max_freq_hz)
+        idx = np.where(mask)[0]
+        if idx.size == 0:
+            return []
+
+        max_power = float(np.max(total[idx]))
+        if max_power <= 0.0:
+            return []
+
+        # Pick a few distinct peaks (avoid adjacent bins).
+        bin_hz = float(sample_rate_hz) / float(n)
+        sep_bins = max(1, int(200.0 / max(bin_hz, 1e-6)))
+        thresh = max_power * 0.15
+
+        candidates = idx[np.argsort(total[idx])[::-1]]
+        peaks: list[int] = []
+        for b in candidates:
+            if float(total[b]) < thresh:
+                break
+            if any(abs(b - p) < sep_bins for p in peaks):
+                continue
+            peaks.append(int(b))
+            if len(peaks) >= max(1, self._radar_max_dots):
+                break
+        if not peaks:
+            return []
+
+        band_bins = max(1, int(80.0 / max(bin_hz, 1e-6)))
+
+        energies: list[tuple[int, float, float, float, float]] = []
+        for b in peaks:
+            lo = max(0, b - band_bins)
+            hi = min(total.size - 1, b + band_bins)
+            e_fl = float(np.sum(p_fl[lo : hi + 1])) if p_fl is not None else 0.0
+            e_fr = float(np.sum(p_fr[lo : hi + 1])) if p_fr is not None else 0.0
+            e_bl = float(np.sum(p_bl[lo : hi + 1])) if p_bl is not None else 0.0
+            e_br = float(np.sum(p_br[lo : hi + 1])) if p_br is not None else 0.0
+            energies.append((b, e_fl, e_fr, e_bl, e_br))
+
+        max_e = max((e_fl + e_fr + e_bl + e_br) for _, e_fl, e_fr, e_bl, e_br in energies) + 1e-9
+
+        pose = self._head_pose
+        yaw = None
+        if pose is not None and (asyncio.get_running_loop().time() - pose.last_seen_monotonic) <= 1.0:
+            yaw = pose.yaw_deg
+
+        dots: list[dict[str, Any]] = []
+        w = 0.70710678
+        for b, e_fl, e_fr, e_bl, e_br in energies:
+            e_total = e_fl + e_fr + e_bl + e_br
+            if e_total <= 0.0:
+                continue
+
+            # Compress dynamic range so multiple dots stay visible.
+            intensity = float(np.clip(np.sqrt(e_total / max_e), 0.0, 1.0))
+
+            if has_front and has_back:
+                x = w * ((e_fr - e_fl) + (e_br - e_bl))
+                y = w * ((e_fr + e_fl) - (e_br + e_bl))
+                raw_dir = float(np.degrees(np.arctan2(x, y)))
+            elif has_front:
+                t = (e_fl + e_fr) + 1e-9
+                balance = (e_fr - e_fl) / t
+                raw_dir = float(np.clip(balance * 90.0, -90.0, 90.0))
+            else:
+                # Back-only.
+                t = (e_bl + e_br) + 1e-9
+                balance = (e_br - e_bl) / t
+                raw_dir = self._wrap_deg(180.0 - float(balance * 45.0))
+
+            dir_deg = raw_dir
+            key = int(round(float(freqs[b]) / 50.0) * 50)
+            if yaw is not None:
+                world_estimate = self._wrap_deg(yaw + raw_dir)
+                track = self._radar_tracks.get(key)
+                if track is None:
+                    track = RadarTrack(world_direction_deg=world_estimate, last_seen_monotonic=now)
+                    self._radar_tracks[key] = track
+                else:
+                    track.world_direction_deg = self._lerp_angle(track.world_direction_deg, world_estimate, 0.25)
+                    track.last_seen_monotonic = now
+                dir_deg = self._wrap_deg(track.world_direction_deg - yaw)
+
+            ui = self._direction_to_ui(dir_deg, intensity)
+            dots.append(
+                {
+                    "freqHz": float(freqs[b]),
+                    "directionDeg": dir_deg,
+                    "intensity": intensity,
+                    "radarX": float(ui.get("radarX", 0.0)),
+                    "radarY": float(ui.get("radarY", 0.0)),
+                }
+            )
+
+        # Prune stale tracks.
+        for k, tr in list(self._radar_tracks.items()):
+            if (now - tr.last_seen_monotonic) > 2.0:
+                self._radar_tracks.pop(k, None)
+
+        dots.sort(key=lambda d: float(d.get("intensity", 0.0)), reverse=True)
+        return dots[: max(1, self._radar_max_dots)]
 
     async def _alarms_loop(self) -> None:
         """Very lightweight audio heuristics for hackathon demo."""

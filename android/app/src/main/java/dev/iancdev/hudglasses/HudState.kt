@@ -2,6 +2,13 @@ package dev.iancdev.hudglasses
 
 import android.media.MediaRecorder
 
+data class RadarDot(
+    val freqHz: Float,
+    val radarX: Float,
+    val radarY: Float,
+    val intensity: Float,
+)
+
 data class HudState(
     val serverUrl: String = "ws://10.19.130.231:8765",
     val eventsConnected: Boolean = false,
@@ -35,6 +42,7 @@ data class HudState(
     val intensity: Float = 0f,
     val radarX: Float = 0f,
     val radarY: Float = 0f,
+    val radarDots: List<RadarDot> = emptyList(),
     val glowEdge: String = "top",
     val glowStrength: Float = 0f,
     val fireAlarm: String = "idle",
