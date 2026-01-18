@@ -189,6 +189,12 @@ class HudServer:
         #   <1.0 => weaker front/back pull (more sideways)
         #   >1.0 => stronger front/back pull (more front/back)
         self._hybrid_front_back_gain: float = float(os.environ.get("HYBRID_FRONT_BACK_GAIN", "1.0"))
+        # Additional hybrid tuning: scale the front/back totals before computing front/back balance.
+        # Use these to bias the "front vs back" decision without affecting left/right.
+        #   HYBRID_FRONT_GAIN > HYBRID_BACK_GAIN => easier to classify as "front"
+        #   HYBRID_BACK_GAIN  > HYBRID_FRONT_GAIN => easier to classify as "back"
+        self._hybrid_front_gain: float = float(os.environ.get("HYBRID_FRONT_GAIN", "1.0"))
+        self._hybrid_back_gain: float = float(os.environ.get("HYBRID_BACK_GAIN", "1.0"))
         # Bias the 4-mic (quad) centroid slightly toward the front (phone mics can be much "hotter").
         self._quad_front_weight: float = float(os.environ.get("QUAD_FRONT_WEIGHT", "1.3"))
         self._quad_back_weight: float = float(os.environ.get("QUAD_BACK_WEIGHT", "0.01"))
@@ -1085,6 +1091,8 @@ class HudServer:
             },
             "directionConfig": {
                 "hybridFrontBackGain": self._hybrid_front_back_gain,
+                "hybridFrontGain": self._hybrid_front_gain,
+                "hybridBackGain": self._hybrid_back_gain,
                 "quadFrontWeight": self._quad_front_weight,
                 "quadBackWeight": self._quad_back_weight,
                 "esp32GainLeft": self._esp32_gain_left,
@@ -1265,6 +1273,10 @@ class HudServer:
                 back_total = float(bl + br)
                 front_total = float(fl + fr)
                 x_balance = float((br - bl) / (back_total + eps))  # -1..+1 (phone decides L/R)
+                front_gain = max(0.0, float(self._hybrid_front_gain))
+                back_gain = max(0.0, float(self._hybrid_back_gain))
+                front_total *= front_gain
+                back_total *= back_gain
                 y_balance = float((front_total - back_total) / (front_total + back_total + eps))  # -1..+1 (front/back)
                 x_balance = float(np.clip(x_balance, -1.0, 1.0))
                 y_balance = float(y_balance * float(self._hybrid_front_back_gain))
@@ -1496,6 +1508,10 @@ class HudServer:
                 back_total = float(e_bl + e_br)
                 front_total = float(e_fl + e_fr)
                 x_balance = float((e_br - e_bl) / (back_total + eps))
+                front_gain = max(0.0, float(self._hybrid_front_gain))
+                back_gain = max(0.0, float(self._hybrid_back_gain))
+                front_total *= front_gain
+                back_total *= back_gain
                 y_balance = float((front_total - back_total) / (front_total + back_total + eps))
                 x_balance = float(np.clip(x_balance, -1.0, 1.0))
                 y_balance = float(y_balance * float(self._hybrid_front_back_gain))
