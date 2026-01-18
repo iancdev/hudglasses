@@ -183,11 +183,11 @@ class HudServer:
         self._back_balance_gain_deg: float = float(os.environ.get("BACK_BALANCE_GAIN_DEG", "150.0"))
         self._back_balance_exp: float = float(os.environ.get("BACK_BALANCE_EXP", "0.8"))
         # Bias the 4-mic (quad) centroid slightly toward the front (phone mics can be much "hotter").
-        self._quad_front_weight: float = float(os.environ.get("QUAD_FRONT_WEIGHT", "1.0"))
-        self._quad_back_weight: float = float(os.environ.get("QUAD_BACK_WEIGHT", "0.3"))
+        self._quad_front_weight: float = float(os.environ.get("QUAD_FRONT_WEIGHT", "1.3"))
+        self._quad_back_weight: float = float(os.environ.get("QUAD_BACK_WEIGHT", "0.01"))
         # Per-mic gain trims (use to compensate mismatched sensitivity, e.g. hot right mic).
         self._esp32_gain_left: float = float(os.environ.get("ESP32_GAIN_LEFT", "1.0"))
-        self._esp32_gain_right: float = float(os.environ.get("ESP32_GAIN_RIGHT", "0.2"))
+        self._esp32_gain_right: float = float(os.environ.get("ESP32_GAIN_RIGHT", "0.25"))
 
         # Approximate mic geometry (mm) for 4-corner neckband layout:
         # - back edge is the phone (rear), front edge is the ESP32s (forward).
@@ -296,9 +296,9 @@ class HudServer:
         self._external_haptics_format: str = (os.environ.get("EXTERNAL_HAPTICS_FORMAT") or "csv").strip().lower()
         self._external_haptics_open_timeout_s: float = float(os.environ.get("EXTERNAL_HAPTICS_OPEN_TIMEOUT_S") or "15.0")
         self._external_haptics_intensity: int = int(os.environ.get("EXTERNAL_HAPTICS_INTENSITY") or "255")
-        self._external_haptics_keyword_ms: int = int(os.environ.get("EXTERNAL_HAPTICS_KEYWORD_MS") or "250")
-        self._external_haptics_horn_ms: int = int(os.environ.get("EXTERNAL_HAPTICS_HORN_MS") or "250")
-        self._external_haptics_fire_ms: int = int(os.environ.get("EXTERNAL_HAPTICS_FIRE_MS") or "500")
+        self._external_haptics_keyword_ms: int = int(os.environ.get("EXTERNAL_HAPTICS_KEYWORD_MS") or "1000")
+        self._external_haptics_horn_ms: int = int(os.environ.get("EXTERNAL_HAPTICS_HORN_MS") or "1000")
+        self._external_haptics_fire_ms: int = int(os.environ.get("EXTERNAL_HAPTICS_FIRE_MS") or "1000")
         self._external_haptics_min_side_delta: float = float(os.environ.get("EXTERNAL_HAPTICS_MIN_SIDE_DELTA") or "0.02")
 
         self._external_haptics_left: ExternalHapticsClient | None = None
