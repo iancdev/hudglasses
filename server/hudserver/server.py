@@ -142,6 +142,15 @@ class HudServer:
         self._radar_max_dots: int = int(os.environ.get("RADAR_MAX_DOTS", "3"))
         self._radar_min_freq_hz: float = float(os.environ.get("RADAR_MIN_FREQ_HZ", "200"))
         self._radar_max_freq_hz: float = float(os.environ.get("RADAR_MAX_FREQ_HZ", "4000"))
+        # Track "baseline" spectrum so we can detect sources as outliers (boosted bands).
+        # Higher alpha -> baseline adapts faster (fewer false positives, but less sensitivity).
+        self._radar_baseline_alpha: float = float(os.environ.get("RADAR_BASELINE_ALPHA", "0.03"))
+        # Cap how much a sudden spike is allowed to pull the baseline in one update.
+        self._radar_baseline_peak_cap: float = float(os.environ.get("RADAR_BASELINE_PEAK_CAP", "2.0"))
+        # Minimum relative boost over baseline for a band to be considered a source.
+        # (excess / baseline) threshold, i.e. 1.0 means "2x baseline power".
+        self._radar_outlier_ratio_thresh: float = float(os.environ.get("RADAR_OUTLIER_RATIO_THRESH", "0.7"))
+        self._radar_last_baseline: np.ndarray | None = None
         self._radar_last_compute_s: float = 0.0
         self._radar_dots: list[dict[str, Any]] = []
         self._radar_tracks: dict[int, RadarTrack] = {}
@@ -979,19 +988,49 @@ class HudServer:
         if idx.size == 0:
             return []
 
+        pose = self._head_pose
+        yaw = None
+        if pose is not None and (asyncio.get_running_loop().time() - pose.last_seen_monotonic) <= 1.0:
+            yaw = pose.yaw_deg
+
         max_power = float(np.max(total[idx]))
         if max_power <= 0.0:
-            return []
+            return self._emit_radar_tracks(now, yaw)
 
-        # Pick a few distinct peaks (avoid adjacent bins).
+        # Maintain a slow-moving "baseline" spectrum, then treat boosted (outlier) bands as sources.
+        baseline = self._radar_last_baseline
+        if baseline is None or baseline.shape != total.shape:
+            baseline = total.astype(np.float32, copy=True)
+            self._radar_last_baseline = baseline
+        else:
+            a = float(np.clip(self._radar_baseline_alpha, 0.0, 1.0))
+            cap = max(1.0, float(self._radar_baseline_peak_cap))
+            # Avoid letting short spikes immediately become "normal".
+            clipped = np.minimum(total, baseline * cap)
+            baseline[:] = (1.0 - a) * baseline + a * clipped
+
+        eps = 1e-9
+        excess = np.maximum(total - baseline, 0.0).astype(np.float32, copy=False)
+        max_excess = float(np.max(excess[idx]))
+        if max_excess <= 0.0:
+            return self._emit_radar_tracks(now, yaw)
+
+        # Pick a few distinct outlier peaks (avoid adjacent bins).
         bin_hz = float(sample_rate_hz) / float(n)
         sep_bins = max(1, int(200.0 / max(bin_hz, 1e-6)))
-        thresh = max_power * 0.15
+        # Require a noticeable boost vs baseline and also be among the strongest boosts.
+        rel_thresh = max(0.0, float(self._radar_outlier_ratio_thresh))
+        abs_thresh = max_excess * 0.25
 
-        candidates = idx[np.argsort(total[idx])[::-1]]
+        # Sort by a combined score so we don't over-favor tiny baseline bins.
+        rel = (excess[idx] / (baseline[idx] + eps)).astype(np.float32, copy=False)
+        score = (excess[idx] * np.sqrt(rel + 1e-6)).astype(np.float32, copy=False)
+        candidates = idx[np.argsort(score)[::-1]]
         peaks: list[int] = []
         for b in candidates:
-            if float(total[b]) < thresh:
+            if float(excess[b]) < abs_thresh:
+                break
+            if float(excess[b] / (baseline[b] + eps)) < rel_thresh:
                 break
             if any(abs(b - p) < sep_bins for p in peaks):
                 continue
@@ -1001,9 +1040,9 @@ class HudServer:
         if not peaks:
             return []
 
-        band_bins = max(1, int(80.0 / max(bin_hz, 1e-6)))
+        band_bins = max(1, int(120.0 / max(bin_hz, 1e-6)))
 
-        energies: list[tuple[int, float, float, float, float]] = []
+        energies: list[tuple[int, float, float, float, float, float, float]] = []
         for b in peaks:
             lo = max(0, b - band_bins)
             hi = min(total.size - 1, b + band_bins)
@@ -1011,25 +1050,29 @@ class HudServer:
             e_fr = float(np.sum(p_fr[lo : hi + 1])) if p_fr is not None else 0.0
             e_bl = float(np.sum(p_bl[lo : hi + 1])) if p_bl is not None else 0.0
             e_br = float(np.sum(p_br[lo : hi + 1])) if p_br is not None else 0.0
-            energies.append((b, e_fl, e_fr, e_bl, e_br))
+            band_total = float(np.sum(total[lo : hi + 1]))
+            band_base = float(np.sum(baseline[lo : hi + 1]))
+            band_excess = max(0.0, band_total - band_base)
+            energies.append((b, e_fl, e_fr, e_bl, e_br, band_total, band_excess))
 
-        pose = self._head_pose
-        yaw = None
-        if pose is not None and (asyncio.get_running_loop().time() - pose.last_seen_monotonic) <= 1.0:
-            yaw = pose.yaw_deg
-
-        max_e = max((e_fl + e_fr + e_bl + e_br) for _, e_fl, e_fr, e_bl, e_br in energies) + 1e-9
+        max_ex = max((band_excess for *_, band_excess in energies), default=0.0) + 1e-9
 
         candidates: list[tuple[float, float, float]] = []
         # (freq_hz, intensity, raw_dir_deg)
         w = 0.70710678
-        for b, e_fl, e_fr, e_bl, e_br in energies:
-            e_total = e_fl + e_fr + e_bl + e_br
-            if e_total <= 0.0:
+        for b, e_fl, e_fr, e_bl, e_br, band_total, band_excess in energies:
+            if band_total <= 0.0 or band_excess <= 0.0:
                 continue
 
-            # Compress dynamic range so multiple dots stay visible.
-            intensity = float(np.clip(np.sqrt(e_total / max_e), 0.0, 1.0))
+            # Source strength is based on how much a frequency band exceeds the baseline.
+            intensity = float(np.clip(np.sqrt(band_excess / max_ex), 0.0, 1.0))
+
+            # Subtract baseline proportionally so direction is driven by the outlier component.
+            scale = float(np.clip(band_excess / (band_total + eps), 0.0, 1.0))
+            e_fl *= scale
+            e_fr *= scale
+            e_bl *= scale
+            e_br *= scale
 
             if has_front and has_back:
                 x = w * ((e_fr - e_fl) + (e_br - e_bl))
@@ -1046,7 +1089,18 @@ class HudServer:
                 gain = float(np.clip(self._back_balance_gain_deg, 0.0, 170.0))
                 shaped = self._shape_balance(float(balance))
                 raw_dir = self._wrap_deg(180.0 - (shaped * gain))
-            candidates.append((float(freqs[b]), float(intensity), float(raw_dir)))
+
+            # Use an excess-weighted centroid for more stable color/labeling.
+            lo = max(0, int(b) - band_bins)
+            hi = min(int(total.size - 1), int(b) + band_bins)
+            band_excess_bins = excess[lo : hi + 1]
+            denom = float(np.sum(band_excess_bins)) + eps
+            if denom > eps:
+                freq_hz = float(np.sum(freqs[lo : hi + 1] * band_excess_bins) / denom)
+            else:
+                freq_hz = float(freqs[int(b)])
+
+            candidates.append((float(freq_hz), float(intensity), float(raw_dir)))
 
         if not candidates:
             # Fade out existing tracks.

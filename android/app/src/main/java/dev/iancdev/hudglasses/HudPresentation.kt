@@ -21,9 +21,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -37,6 +41,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ViewModelStoreOwner
 import androidx.savedstate.SavedStateRegistryOwner
+import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 class HudPresentation(
     context: Context,
@@ -77,11 +84,12 @@ private fun setViewTreeOwnersReflective(view: View, owner: ComponentActivity) {
 @Composable
 private fun HudUi() {
     val state by HudStore.state.collectAsState()
+    val smoothedDots = rememberSmoothedRadarDots(state.radarDots)
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        Radar(state)
+        Radar(state, smoothedDots)
         Subtitles(state)
         KeywordAlert(state)
-        EdgeGlow(state)
+        EdgeGlow(state, smoothedDots)
         StatusOverlay(state)
     }
 }
@@ -121,13 +129,13 @@ private fun StatusOverlay(state: HudState) {
 }
 
 @Composable
-private fun Radar(state: HudState) {
+private fun Radar(state: HudState, dots: List<RadarDot>) {
     Canvas(modifier = Modifier.fillMaxSize()) {
         val center = Offset(size.width * 0.5f, size.height * 0.35f)
         val radius = size.minDimension * 0.12f
         drawCircle(color = Color(0xFF2A2A2A), radius = radius, center = center)
 
-        for (d in state.radarDots) {
+        for (d in dots) {
             val dot = Offset(center.x + d.radarX * radius, center.y - d.radarY * radius)
             val dotColor = radarDotColor(d.freqHz)
             val alpha = (0.25f + 0.75f * d.intensity).coerceIn(0f, 1f)
@@ -193,75 +201,228 @@ private fun KeywordAlert(state: HudState) {
     }
 }
 
+private data class DotAnim(
+    val freqHz: androidx.compose.animation.core.Animatable<Float, androidx.compose.animation.core.AnimationVector1D>,
+    val radarX: androidx.compose.animation.core.Animatable<Float, androidx.compose.animation.core.AnimationVector1D>,
+    val radarY: androidx.compose.animation.core.Animatable<Float, androidx.compose.animation.core.AnimationVector1D>,
+    val intensity: androidx.compose.animation.core.Animatable<Float, androidx.compose.animation.core.AnimationVector1D>,
+)
+
 @Composable
-private fun EdgeGlow(state: HudState) {
-    val glow = when {
-        state.fireAlarm != "idle" -> Color.Red
-        state.carHorn != "idle" -> Color.Yellow
-        else -> Color.White
+private fun rememberSmoothedRadarDots(rawDots: List<RadarDot>): List<RadarDot> {
+    val scope = rememberCoroutineScope()
+    val anims = remember { mutableStateMapOf<Int, DotAnim>() }
+
+    fun keyOf(d: RadarDot): Int = if (d.trackId != 0) d.trackId else d.freqHz.roundToInt()
+
+    LaunchedEffect(rawDots) {
+        val present = rawDots.associateBy(::keyOf)
+
+        // Fade out tracks we didn't see this update.
+        for ((k, a) in anims) {
+            if (!present.containsKey(k)) {
+                scope.launch {
+                    a.intensity.animateTo(
+                        targetValue = 0f,
+                        animationSpec = androidx.compose.animation.core.tween(durationMillis = 280),
+                    )
+                    if (a.intensity.value <= 0.01f) {
+                        anims.remove(k)
+                    }
+                }
+            }
+        }
+
+        for ((k, d) in present) {
+            val a =
+                anims.getOrPut(k) {
+                    DotAnim(
+                        freqHz = androidx.compose.animation.core.Animatable(d.freqHz),
+                        radarX = androidx.compose.animation.core.Animatable(d.radarX),
+                        radarY = androidx.compose.animation.core.Animatable(d.radarY),
+                        intensity = androidx.compose.animation.core.Animatable(d.intensity),
+                    )
+                }
+
+            // Blend towards the new sample so we "average over the last few" updates,
+            // then animate for interpolation.
+            val blendedX = 0.65f * a.radarX.value + 0.35f * d.radarX
+            val blendedY = 0.65f * a.radarY.value + 0.35f * d.radarY
+            val blendedI = 0.60f * a.intensity.value + 0.40f * d.intensity
+            val blendedF = 0.85f * a.freqHz.value + 0.15f * d.freqHz
+
+            scope.launch {
+                a.freqHz.animateTo(
+                    targetValue = blendedF,
+                    animationSpec = androidx.compose.animation.core.tween(durationMillis = 240),
+                )
+            }
+            scope.launch {
+                a.radarX.animateTo(
+                    targetValue = blendedX,
+                    animationSpec = androidx.compose.animation.core.tween(durationMillis = 220),
+                )
+            }
+            scope.launch {
+                a.radarY.animateTo(
+                    targetValue = blendedY,
+                    animationSpec = androidx.compose.animation.core.tween(durationMillis = 220),
+                )
+            }
+            scope.launch {
+                a.intensity.animateTo(
+                    targetValue = blendedI.coerceIn(0f, 1f),
+                    animationSpec = androidx.compose.animation.core.tween(durationMillis = 180),
+                )
+            }
+        }
     }
-    val alpha = state.glowStrength.coerceIn(0f, 1f) * 0.85f
-    if (alpha <= 0f) return
 
-    val thickness: Dp = 90.dp
-    val c = glow.copy(alpha = alpha)
-    Box(modifier = Modifier.fillMaxSize()) {
-        when (state.glowEdge) {
-            "left" -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .width(thickness)
-                        .align(Alignment.CenterStart)
-                        .background(
-                            Brush.horizontalGradient(
-                                colors = listOf(c, Color.Transparent),
-                            )
-                        )
-                )
-            }
+    return anims.entries
+        .map { (k, a) ->
+            RadarDot(
+                trackId = k,
+                freqHz = a.freqHz.value,
+                radarX = a.radarX.value,
+                radarY = a.radarY.value,
+                intensity = a.intensity.value,
+            )
+        }
+        .filter { it.intensity > 0.02f }
+        .sortedByDescending { it.intensity }
+}
 
-            "right" -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .width(thickness)
-                        .align(Alignment.CenterEnd)
-                        .background(
-                            Brush.horizontalGradient(
-                                colors = listOf(Color.Transparent, c),
-                            )
-                        )
-                )
-            }
+@Composable
+private fun EdgeGlow(state: HudState, dots: List<RadarDot>) {
+    val thickness: Dp = 74.dp
 
-            "bottom" -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(thickness)
-                        .align(Alignment.BottomCenter)
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(Color.Transparent, c),
-                            )
-                        )
-                )
-            }
+    // Alarm overlays keep the old full-edge glow.
+    val alarmGlow: Color? =
+        when {
+            state.fireAlarm != "idle" -> Color.Red
+            state.carHorn != "idle" -> Color.Yellow
+            else -> null
+        }
 
-            else -> { // top
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(thickness)
-                        .align(Alignment.TopCenter)
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(c, Color.Transparent),
-                            )
-                        )
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val w = size.width
+        val h = size.height
+        val t = thickness.toPx()
+
+        fun yFromRadarY(radarY: Float): Float = ((1f - radarY.coerceIn(-1f, 1f)) * 0.5f) * h
+        fun xFromRadarX(radarX: Float): Float = ((radarX.coerceIn(-1f, 1f) + 1f) * 0.5f) * w
+
+        fun drawDirectionalGlowAtEdge(
+            center: Offset,
+            edge: String,
+            color: Color,
+            intensity: Float,
+        ) {
+            val i = intensity.coerceIn(0f, 1f)
+            if (i <= 0.01f) return
+
+            val alpha = (0.15f + 0.75f * i).coerceIn(0f, 1f)
+            val c0 = color.copy(alpha = alpha)
+            val c1 = color.copy(alpha = alpha * 0.35f)
+
+            // Keep the glow confined to the edge band (thickness = t) and ensure it fades out
+            // before reaching the inner edge, so it never looks "cut off".
+            val band = t
+            val fadePx = band * 0.98f
+            val radius = (band * (2.2f + 5.0f * i)).coerceAtLeast(band * 2.0f)
+            val fadeStop = (fadePx / radius).coerceIn(0.05f, 0.98f)
+            val brush =
+                Brush.radialGradient(
+                    colorStops =
+                        arrayOf(
+                            0.00f to c0,
+                            (fadeStop * 0.25f) to c1,
+                            fadeStop to Color.Transparent,
+                            1.00f to Color.Transparent,
+                        ),
+                    center = center,
+                    radius = radius,
                 )
+
+            when (edge) {
+                "left" -> drawRect(brush = brush, topLeft = Offset(0f, 0f), size = androidx.compose.ui.geometry.Size(t, h))
+                "right" ->
+                    drawRect(
+                        brush = brush,
+                        topLeft = Offset(w - t, 0f),
+                        size = androidx.compose.ui.geometry.Size(t, h),
+                    )
+                "bottom" ->
+                    drawRect(
+                        brush = brush,
+                        topLeft = Offset(0f, h - t),
+                        size = androidx.compose.ui.geometry.Size(w, t),
+                    )
+                else -> drawRect(brush = brush, topLeft = Offset(0f, 0f), size = androidx.compose.ui.geometry.Size(w, t))
             }
+        }
+
+        // New: directional, edge-compressed multi-source glow (color by frequency).
+        for (d in dots) {
+            val ax = abs(d.radarX)
+            val ay = abs(d.radarY)
+            val edge =
+                if (ay >= ax) {
+                    if (d.radarY >= 0f) "top" else "bottom"
+                } else {
+                    if (d.radarX <= 0f) "left" else "right"
+                }
+
+            val center =
+                when (edge) {
+                    "left" -> Offset(0f, yFromRadarY(d.radarY))
+                    "right" -> Offset(w, yFromRadarY(d.radarY))
+                    "bottom" -> Offset(xFromRadarX(d.radarX), h)
+                    else -> Offset(xFromRadarX(d.radarX), 0f)
+                }
+
+            val color = radarDotColor(d.freqHz)
+            drawDirectionalGlowAtEdge(center = center, edge = edge, color = color, intensity = d.intensity)
+        }
+
+        // Fallback: if no radar sources, use the server-provided single-edge glow.
+        if (dots.isEmpty()) {
+            val alpha = state.glowStrength.coerceIn(0f, 1f) * 0.85f
+            if (alpha > 0f) {
+                val c = Color.White.copy(alpha = alpha)
+                val edge = state.glowEdge
+                val center =
+                    when (edge) {
+                        "left" -> Offset(0f, h * 0.5f)
+                        "right" -> Offset(w, h * 0.5f)
+                        "bottom" -> Offset(w * 0.5f, h)
+                        else -> Offset(w * 0.5f, 0f)
+                    }
+                drawDirectionalGlowAtEdge(center = center, edge = edge, color = c, intensity = 1f)
+            }
+        }
+
+        // Alarm overlay last (so it's always visible).
+        if (alarmGlow != null) {
+            val alpha = 0.85f
+            val c = alarmGlow.copy(alpha = alpha)
+            val band = t
+            val radius = t * 7.0f
+            val fadePx = band * 0.98f
+            val fadeStop = (fadePx / radius).coerceIn(0.05f, 0.98f)
+            val brush =
+                Brush.radialGradient(
+                    colorStops =
+                        arrayOf(
+                            0.00f to c,
+                            (fadeStop * 0.25f) to c.copy(alpha = 0.35f),
+                            fadeStop to Color.Transparent,
+                            1.00f to Color.Transparent,
+                        ),
+                    center = Offset(w * 0.5f, 0f),
+                    radius = radius,
+                )
+            drawRect(brush = brush, topLeft = Offset(0f, 0f), size = androidx.compose.ui.geometry.Size(w, t))
         }
     }
 }

@@ -259,6 +259,7 @@ class WsController(
                         val d = arr.optJSONObject(i) ?: continue
                         add(
                             RadarDot(
+                                trackId = d.optInt("trackId", 0),
                                 freqHz = d.optDouble("freqHz", 0.0).toFloat(),
                                 radarX = d.optDouble("radarX", 0.0).toFloat(),
                                 radarY = d.optDouble("radarY", 0.0).toFloat(),

@@ -3,6 +3,7 @@ package dev.iancdev.hudglasses
 import android.media.MediaRecorder
 
 data class RadarDot(
+    val trackId: Int = 0,
     val freqHz: Float,
     val radarX: Float,
     val radarY: Float,
