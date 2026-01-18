@@ -18,10 +18,9 @@ if ! command -v scrcpy >/dev/null 2>&1; then
 fi
 
 echo "Recording to: $RECORD_PATH"
-args=(--no-audio --max-fps "$FPS" --bit-rate "$BITRATE" --window-title "$WINDOW_TITLE" --record "$RECORD_PATH")
+args=(--no-audio --max-fps "$FPS" --video-bit-rate "$BITRATE" --window-title "$WINDOW_TITLE" --record "$RECORD_PATH")
 if [[ -n "$ADB_SERIAL" ]]; then
   args+=(--serial "$ADB_SERIAL")
 fi
 
 scrcpy "${args[@]}"
-

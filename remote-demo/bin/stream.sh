@@ -20,10 +20,9 @@ if ! command -v scrcpy >/dev/null 2>&1; then
 fi
 
 echo "Starting scrcpy..."
-args=(--no-audio --max-fps "$FPS" --bit-rate "$BITRATE" --window-title "$WINDOW_TITLE")
+args=(--no-audio --max-fps "$FPS" --video-bit-rate "$BITRATE" --window-title "$WINDOW_TITLE")
 if [[ -n "$ADB_SERIAL" ]]; then
   args+=(--serial "$ADB_SERIAL")
 fi
 
 scrcpy "${args[@]}"
-

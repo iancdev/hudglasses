@@ -52,7 +52,10 @@ export RECORD_PATH="remote-demo/out/demo.mkv"
 
 ## Notes / troubleshooting
 - If `adb devices -l` shows no device, re-run `./remote-demo/bin/adb_connect.sh`.
+- On Android “Wireless debugging”, there are typically two different ports:
+  - a **pairing** port, and
+  - a **connect** port shown under “IP address & port”.
+  Use the **connect** port with `adb connect`.
 - If you’re trying to stream an **external display** (AR glasses), `scrcpy` may mirror only the primary display depending on device/OS. If your AR content is not visible, we may need to:
   - force the app to render on the primary display, or
   - use a scrcpy version/flag that supports non-default displays (varies by scrcpy version/device).
-
