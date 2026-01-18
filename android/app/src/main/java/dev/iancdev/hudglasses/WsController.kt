@@ -254,7 +254,7 @@ class WsController(
                 serverStatus = obj.optString("server", it.serverStatus),
                 esp32ConnectedLeft = hasLeft,
                 esp32ConnectedRight = hasRight,
-                fireAlarm = if (fireActive) "active" else "idle",
+                fireAlarm = if (fireActive || sirenActive) "active" else "idle",
                 carHorn = if (hornActive) "active" else "idle",
                 siren = if (sirenActive) "active" else "idle",
             )
@@ -310,7 +310,8 @@ class WsController(
             when (type) {
                 AlarmType.FIRE -> it.copy(fireAlarm = state)
                 AlarmType.CAR_HORN -> it.copy(carHorn = state)
-                AlarmType.SIREN -> it.copy(siren = state)
+                // Treat siren as "fire alarm" in the client UI (same urgency bucket).
+                AlarmType.SIREN -> it.copy(fireAlarm = state, siren = state)
             }
         }
     }

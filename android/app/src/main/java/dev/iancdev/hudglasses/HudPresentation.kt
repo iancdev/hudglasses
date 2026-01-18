@@ -35,10 +35,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ViewModelStoreOwner
 import androidx.savedstate.SavedStateRegistryOwner
@@ -99,10 +101,38 @@ private fun HudUi() {
     val smoothedDots = rememberSmoothedRadarDots(state.radarDots)
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         Radar(state, smoothedDots)
+        AlarmAlert(state)
         Subtitles(state)
         KeywordAlert(state)
         EdgeGlow(state, smoothedDots)
         StatusOverlay(state)
+    }
+}
+
+@Composable
+private fun AlarmAlert(state: HudState) {
+    val fireLike = state.fireAlarm != "idle" || state.siren != "idle"
+    val horn = state.carHorn != "idle"
+    if (!fireLike && !horn) return
+
+    val lines = buildList {
+        if (fireLike) add("FIRE ALARM" to Color.Red)
+        if (horn) add("CAR HORN" to Color.Yellow)
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+            for ((text, color) in lines) {
+                Text(
+                    text = text,
+                    color = color,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Clip,
+                    style = MaterialTheme.typography.displayLarge.copy(fontSize = 88.sp, fontWeight = FontWeight.Black),
+                )
+            }
+        }
     }
 }
 
@@ -167,9 +197,9 @@ private fun Radar(state: HudState, dots: List<RadarDot>) {
         }
 
         val dot = Offset(center.x + state.radarX * radius, center.y - state.radarY * radius)
+        val fireLike = state.fireAlarm != "idle" || state.siren != "idle"
         val dotColor = when {
-            state.fireAlarm != "idle" -> Color.Red
-            state.siren != "idle" -> Color.Cyan
+            fireLike -> Color.Red
             state.carHorn != "idle" -> Color.Yellow
             else -> Color.White
         }
@@ -329,10 +359,10 @@ private fun EdgeGlow(state: HudState, dots: List<RadarDot>) {
     val thickness: Dp = 100.dp
 
     // Alarm overlays keep the old full-edge glow.
+    val fireLike = state.fireAlarm != "idle" || state.siren != "idle"
     val alarmGlow: Color? =
         when {
-            state.fireAlarm != "idle" -> Color.Red
-            state.siren != "idle" -> Color.Cyan
+            fireLike -> Color.Red
             state.carHorn != "idle" -> Color.Yellow
             else -> null
         }

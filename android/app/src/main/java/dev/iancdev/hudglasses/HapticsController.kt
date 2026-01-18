@@ -61,7 +61,8 @@ class HapticsController(
                 buzz(pattern = longArrayOf(0, 200, 100, 200, 100, 200))
             }
             "alarm.siren" -> if (obj.optString("state") == "started") {
-                buzz(pattern = longArrayOf(0, 450, 120, 450, 120, 700))
+                // Match the fire alarm pattern (same urgency bucket).
+                buzz(pattern = longArrayOf(0, 800, 200, 800))
             }
             "alert.keyword" -> {
                 buzz(pattern = longArrayOf(0, 120, 80, 120, 80, 120))
