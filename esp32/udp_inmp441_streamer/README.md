@@ -25,6 +25,5 @@ This repo’s server expects ESP32 audio over **WebSocket** (`/esp32/audio`), so
 ## Run the laptop bridge
 From `server/` (inside your `.venv`):
 ```bash
-python -m tools.udp_to_ws_bridge --server ws://<laptop-ip>:8765 --left-port 12345 --right-port 12346
+python tools/udp_to_ws_bridge.py --server ws://<laptop-ip>:8765 --left-port 12345 --right-port 12346
 ```
-

@@ -22,8 +22,9 @@ class RoleCfg:
 
 
 class _UdpProtocol(asyncio.DatagramProtocol):
-    def __init__(self, *, role: Role, queue: asyncio.Queue[bytes], chunk_bytes: int) -> None:
+    def __init__(self, *, role: Role, udp_port: int, queue: asyncio.Queue[bytes], chunk_bytes: int) -> None:
         self._role = role
+        self._port = int(udp_port)
         self._queue = queue
         self._chunk_bytes = int(chunk_bytes)
         self._buf = bytearray()
@@ -64,7 +65,7 @@ class _UdpProtocol(asyncio.DatagramProtocol):
             logging.getLogger("udp_bridge").info(
                 "UDP %s port=%d recv=%dB emit=%dB buf=%dB",
                 self._role,
-                getattr(self, "_port", -1),
+                self._port,
                 self._total_received,
                 self._total_emitted,
                 len(self._buf),
@@ -146,12 +147,12 @@ async def main() -> None:
     right_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=400)
 
     loop = asyncio.get_running_loop()
-    await loop.create_datagram_endpoint(
-        lambda: _UdpProtocol(role="left", queue=left_q, chunk_bytes=chunk_bytes),
+    left_transport, _ = await loop.create_datagram_endpoint(
+        lambda: _UdpProtocol(role="left", udp_port=left_cfg.udp_port, queue=left_q, chunk_bytes=chunk_bytes),
         local_addr=("0.0.0.0", left_cfg.udp_port),
     )
-    await loop.create_datagram_endpoint(
-        lambda: _UdpProtocol(role="right", queue=right_q, chunk_bytes=chunk_bytes),
+    right_transport, _ = await loop.create_datagram_endpoint(
+        lambda: _UdpProtocol(role="right", udp_port=right_cfg.udp_port, queue=right_q, chunk_bytes=chunk_bytes),
         local_addr=("0.0.0.0", right_cfg.udp_port),
     )
 
@@ -165,12 +166,15 @@ async def main() -> None:
         chunk_bytes,
     )
 
-    await asyncio.gather(
-        _ws_sender(server_base=server_base, cfg=left_cfg, queue=left_q, sample_rate_hz=sample_rate_hz, frame_ms=frame_ms),
-        _ws_sender(server_base=server_base, cfg=right_cfg, queue=right_q, sample_rate_hz=sample_rate_hz, frame_ms=frame_ms),
-    )
+    try:
+        await asyncio.gather(
+            _ws_sender(server_base=server_base, cfg=left_cfg, queue=left_q, sample_rate_hz=sample_rate_hz, frame_ms=frame_ms),
+            _ws_sender(server_base=server_base, cfg=right_cfg, queue=right_q, sample_rate_hz=sample_rate_hz, frame_ms=frame_ms),
+        )
+    finally:
+        left_transport.close()
+        right_transport.close()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
-
