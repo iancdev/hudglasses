@@ -98,26 +98,21 @@ private fun setViewTreeOwnersReflective(view: View, owner: ComponentActivity) {
 @Composable
 private fun HudUi() {
     val state by HudStore.state.collectAsState()
+    if (state.hudShowSplash) {
+        Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+            SplashScreen()
+        }
+        return
+    }
+
     val smoothedDots = rememberSmoothedRadarDots(state.radarDots)
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        if (state.hudShowSplash) {
-            SplashScreen()
-            return@Box
-        }
-        if (state.hudShowRadar) {
-            Radar(state, smoothedDots)
-        }
+        if (state.hudShowRadar) Radar(state, smoothedDots)
         AlarmAlert(state)
-        if (state.hudShowSubtitles) {
-            Subtitles(state)
-        }
+        if (state.hudShowSubtitles) Subtitles(state)
         KeywordAlert(state)
-        if (state.hudShowGlow) {
-            EdgeGlow(state, smoothedDots)
-        }
-        if (state.hudShowDebugText) {
-            StatusOverlay(state)
-        }
+        if (state.hudShowGlow) EdgeGlow(state, smoothedDots)
+        if (state.hudShowDebugText) StatusOverlay(state)
     }
 }
 

@@ -497,28 +497,36 @@ private fun RemoteUi(
             Text("Splash Screen")
             Switch(
                 checked = state.hudShowSplash,
-                onCheckedChange = { enabled -> HudStore.update { it.copy(hudShowSplash = enabled) } },
+                onCheckedChange = { enabled ->
+                    HudStore.update {
+                        if (enabled) it.copy(hudShowSplash = true, hudShowDebugText = false) else it.copy(hudShowSplash = false)
+                    }
+                },
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Glow")
             Switch(
                 checked = state.hudShowGlow,
+                enabled = !state.hudShowSplash,
                 onCheckedChange = { enabled -> HudStore.update { it.copy(hudShowGlow = enabled) } },
             )
             Text("Radar")
             Switch(
                 checked = state.hudShowRadar,
+                enabled = !state.hudShowSplash,
                 onCheckedChange = { enabled -> HudStore.update { it.copy(hudShowRadar = enabled) } },
             )
             Text("Subs")
             Switch(
                 checked = state.hudShowSubtitles,
+                enabled = !state.hudShowSplash,
                 onCheckedChange = { enabled -> HudStore.update { it.copy(hudShowSubtitles = enabled) } },
             )
             Text("Debug")
             Switch(
                 checked = state.hudShowDebugText,
+                enabled = !state.hudShowSplash,
                 onCheckedChange = { enabled -> HudStore.update { it.copy(hudShowDebugText = enabled) } },
             )
         }
