@@ -52,4 +52,7 @@ data class HudState(
     val carHorn: String = "idle",
     val subtitlePartial: String = "",
     val subtitleLines: List<String> = emptyList(),
+    val hudWidthPx: Int? = null,
+    val hudHeightPx: Int? = null,
+    val hudDensityDpi: Int? = null,
 )

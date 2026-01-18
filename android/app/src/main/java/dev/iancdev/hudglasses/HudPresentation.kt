@@ -54,6 +54,17 @@ class HudPresentation(
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        val displayContext = context.createDisplayContext(display)
+        val dm = displayContext.resources.displayMetrics
+        val mode = display.mode
+        HudStore.update {
+            it.copy(
+                hudWidthPx = mode.physicalWidth,
+                hudHeightPx = mode.physicalHeight,
+                hudDensityDpi = dm.densityDpi,
+            )
+        }
+
         val compose = ComposeView(context).apply {
             // These ViewTree* helpers are not in the public API surface on some builds,
             // so we invoke them reflectively to keep the HUD-on-external-display stable.
@@ -118,6 +129,16 @@ private fun StatusOverlay(state: HudState) {
                 color = Color(0xFFB0B0B0),
                 style = MaterialTheme.typography.bodyLarge,
             )
+            val w = state.hudWidthPx
+            val h = state.hudHeightPx
+            val dpi = state.hudDensityDpi
+            if (w != null && h != null && dpi != null) {
+                Text(
+                    text = "HUD ${w}x${h} @ ${dpi}dpi",
+                    color = Color(0xFF808080),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
             if (state.sttError.isNotBlank()) {
                 Text(
                     text = "STT error: ${state.sttError}",
@@ -168,6 +189,14 @@ private fun Subtitles(state: HudState) {
 
     if (text.isBlank()) return
 
+    val maxLines =
+        when {
+            text.length >= 80 -> 4
+            text.length >= 48 -> 3
+            else -> 2
+        }
+    val style = if (maxLines >= 3) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.headlineMedium
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(24.dp)) {
         Box(
             modifier = Modifier
@@ -180,9 +209,9 @@ private fun Subtitles(state: HudState) {
             Text(
                 text = text,
                 color = Color.White,
-                style = MaterialTheme.typography.headlineMedium,
+                style = style,
                 textAlign = TextAlign.Center,
-                maxLines = 2,
+                maxLines = maxLines,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.fillMaxWidth(),
             )
