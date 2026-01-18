@@ -77,6 +77,7 @@ class HudServer:
         self._android_stt: set[ServerConnection] = set()
         self._android_info: dict[ServerConnection, AndroidClientInfo] = {}
         self._android_mic_by_conn: dict[ServerConnection, AndroidMicState] = {}
+        self._android_mic_force_channels: int = 2
 
         # STT audio input selection:
         # - "auto": prefer ESP32 if present, else Android mic
@@ -240,6 +241,9 @@ class HudServer:
                     if channels not in (1, 2):
                         self._logger.warning("Android mic deviceId=%s channels=%s (expected 1 or 2)", device_id, channels)
                         continue
+                    if self._android_mic_force_channels in (1, 2) and channels != self._android_mic_force_channels:
+                        channels = self._android_mic_force_channels
+                        self._logger.info("Android mic %s forcing channels=%d", device_id, channels)
                     samples_per_frame = int(sample_rate_hz * (frame_ms / 1000.0))
                     mono_bytes_per_frame = samples_per_frame * 2
                     bytes_per_frame = mono_bytes_per_frame * channels
@@ -274,7 +278,7 @@ class HudServer:
                 if state is None:
                     # Best-effort default: 16kHz mono PCM, 20ms frames.
                     sample_rate_hz = 16000
-                    channels = 1
+                    channels = self._android_mic_force_channels if self._android_mic_force_channels in (1, 2) else 1
                     frame_ms = 20
                     mono_bytes_per_frame = int(sample_rate_hz * (frame_ms / 1000.0)) * 2
                     bytes_per_frame = mono_bytes_per_frame * channels
