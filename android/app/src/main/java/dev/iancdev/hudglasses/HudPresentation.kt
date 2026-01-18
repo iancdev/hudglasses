@@ -100,12 +100,18 @@ private fun HudUi() {
     val state by HudStore.state.collectAsState()
     val smoothedDots = rememberSmoothedRadarDots(state.radarDots)
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        Radar(state, smoothedDots)
+        if (state.hudShowRadar) {
+            Radar(state, smoothedDots)
+        }
         AlarmAlert(state)
         Subtitles(state)
         KeywordAlert(state)
-        EdgeGlow(state, smoothedDots)
-        StatusOverlay(state)
+        if (state.hudShowGlow) {
+            EdgeGlow(state, smoothedDots)
+        }
+        if (state.hudShowDebugText) {
+            StatusOverlay(state)
+        }
     }
 }
 

@@ -492,6 +492,25 @@ private fun RemoteUi(
             Text("STT error: ${state.sttError}")
         }
 
+        Text("HUD elements (on glasses)")
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Glow")
+            Switch(
+                checked = state.hudShowGlow,
+                onCheckedChange = { enabled -> HudStore.update { it.copy(hudShowGlow = enabled) } },
+            )
+            Text("Radar")
+            Switch(
+                checked = state.hudShowRadar,
+                onCheckedChange = { enabled -> HudStore.update { it.copy(hudShowRadar = enabled) } },
+            )
+            Text("Debug")
+            Switch(
+                checked = state.hudShowDebugText,
+                onCheckedChange = { enabled -> HudStore.update { it.copy(hudShowDebugText = enabled) } },
+            )
+        }
+
         Text("Alarm thresholds (server tuning)")
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
