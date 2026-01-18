@@ -13,9 +13,16 @@ import websockets
 from websockets.asyncio.server import ServerConnection
 
 from hudserver.audio_features import band_power_ratio, pcm16le_bytes_to_float32, rms as rms_value
+from hudserver.external_haptics import ExternalHapticsClient
 from hudserver.logging_utils import setup_logging
 from hudserver.protocol import dumps, loads
 from hudserver.elevenlabs_stt import ElevenLabsConfig, ElevenLabsRealtimeStt
+
+
+def _parse_bool(raw: str | None, default: bool = False) -> bool:
+    if raw is None:
+        return bool(default)
+    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
 @dataclass(slots=True)
@@ -249,7 +256,67 @@ class HudServer:
         # If alarms are disabled, make sure connected clients don't remain "stuck" in a previous active state.
         self._reset_alarm_state_on_connect: bool = self._alarm_detector in ("0", "off", "none", "disabled")
 
+        # External haptics over WebSocket (left/right devices).
+        # Defaults to ON for hackathon convenience.
+        self._external_haptics_enabled: bool = _parse_bool(os.environ.get("EXTERNAL_HAPTICS"), default=True)
+        self._external_haptics_left_url: str = (os.environ.get("EXTERNAL_HAPTICS_LEFT_URL") or "ws://10.19.129.145").strip()
+        self._external_haptics_right_url: str = (os.environ.get("EXTERNAL_HAPTICS_RIGHT_URL") or "ws://10.19.130.147").strip()
+        self._external_haptics_format: str = (os.environ.get("EXTERNAL_HAPTICS_FORMAT") or "csv").strip().lower()
+        self._external_haptics_intensity: int = int(os.environ.get("EXTERNAL_HAPTICS_INTENSITY") or "255")
+        self._external_haptics_keyword_ms: int = int(os.environ.get("EXTERNAL_HAPTICS_KEYWORD_MS") or "250")
+        self._external_haptics_horn_ms: int = int(os.environ.get("EXTERNAL_HAPTICS_HORN_MS") or "250")
+        self._external_haptics_fire_ms: int = int(os.environ.get("EXTERNAL_HAPTICS_FIRE_MS") or "500")
+        self._external_haptics_min_side_delta: float = float(os.environ.get("EXTERNAL_HAPTICS_MIN_SIDE_DELTA") or "0.02")
+
+        self._external_haptics_left: ExternalHapticsClient | None = None
+        self._external_haptics_right: ExternalHapticsClient | None = None
+
         self._stop = asyncio.Event()
+
+    def _external_haptics_side(self, now: float) -> str:
+        # Choose left vs right using the freshest per-side loudness (fallback to direction sign).
+        left_level = 0.0
+        right_level = 0.0
+
+        fl = self._esp32_by_role.get("left")
+        fr = self._esp32_by_role.get("right")
+        if fl is not None and (now - fl.last_seen_monotonic) < 1.0:
+            left_level += float(max(0.0, fl.last_rms))
+        if fr is not None and (now - fr.last_seen_monotonic) < 1.0:
+            right_level += float(max(0.0, fr.last_rms))
+
+        mic = None
+        if self._android_mic_by_conn:
+            mic = max(self._android_mic_by_conn.values(), key=lambda s: s.last_seen_monotonic)
+            if (now - mic.last_seen_monotonic) >= 1.0:
+                mic = None
+        if mic is not None:
+            left_level += float(max(0.0, mic.last_rms_left))
+            right_level += float(max(0.0, mic.last_rms_right))
+
+        if left_level <= 0.0 and right_level <= 0.0:
+            try:
+                dir_deg = float(self._latest_direction_payload.get("directionDeg") or 0.0)
+            except Exception:
+                dir_deg = 0.0
+            if abs(dir_deg) < 15.0:
+                return "both"
+            return "left" if dir_deg < 0.0 else "right"
+
+        delta = float(abs(left_level - right_level))
+        if delta < float(max(0.0, self._external_haptics_min_side_delta)):
+            return "both"
+        return "left" if left_level > right_level else "right"
+
+    def _external_haptics_buzz(self, *, side: str, duration_ms: int, intensity: int) -> None:
+        if not self._external_haptics_enabled:
+            return
+        left = self._external_haptics_left
+        right = self._external_haptics_right
+        if side in ("left", "both") and left is not None:
+            left.enqueue_buzz(duration_ms, intensity)
+        if side in ("right", "both") and right is not None:
+            right.enqueue_buzz(duration_ms, intensity)
 
     def _compute_mic_positions_xy(self) -> dict[str, tuple[float, float]]:
         back = max(1e-3, float(self._array_back_width_mm))
@@ -314,6 +381,28 @@ class HudServer:
         stt_task = asyncio.create_task(self._stt_loop(), name="stt_loop")
         status_task = asyncio.create_task(self._status_loop(), name="status_loop")
         direction_task = asyncio.create_task(self._direction_loop(), name="direction_loop")
+        haptics_left_task: asyncio.Task[None] | None = None
+        haptics_right_task: asyncio.Task[None] | None = None
+        if self._external_haptics_enabled:
+            self._external_haptics_left = ExternalHapticsClient(
+                name="left",
+                url=self._external_haptics_left_url,
+                payload_format=self._external_haptics_format,
+                max_queue=10,
+                logger=self._logger,
+            )
+            self._external_haptics_right = ExternalHapticsClient(
+                name="right",
+                url=self._external_haptics_right_url,
+                payload_format=self._external_haptics_format,
+                max_queue=10,
+                logger=self._logger,
+            )
+            haptics_left_task = asyncio.create_task(self._external_haptics_left.run(self._stop), name="external_haptics_left")
+            haptics_right_task = asyncio.create_task(self._external_haptics_right.run(self._stop), name="external_haptics_right")
+        else:
+            self._logger.info("External haptics disabled (set EXTERNAL_HAPTICS=1 to enable)")
+
         alarms_task: asyncio.Task[None] | None = None
         det = (self._alarm_detector or "").strip().lower()
         if det in ("yamnet", "auto"):
@@ -329,9 +418,17 @@ class HudServer:
             stt_task.cancel()
             status_task.cancel()
             direction_task.cancel()
+            if haptics_left_task is not None:
+                haptics_left_task.cancel()
+            if haptics_right_task is not None:
+                haptics_right_task.cancel()
             if alarms_task is not None:
                 alarms_task.cancel()
             tasks: list[asyncio.Task[None]] = [stt_task, status_task, direction_task]
+            if haptics_left_task is not None:
+                tasks.append(haptics_left_task)
+            if haptics_right_task is not None:
+                tasks.append(haptics_right_task)
             if alarms_task is not None:
                 tasks.append(alarms_task)
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -928,6 +1025,11 @@ class HudServer:
             "esp32": esp32,
             "androidMic": android_mic,
             "sttAudioSource": self._stt_audio_source,
+            "externalHaptics": {
+                "enabled": self._external_haptics_enabled,
+                "leftConnected": bool(self._external_haptics_left and self._external_haptics_left.connected),
+                "rightConnected": bool(self._external_haptics_right and self._external_haptics_right.connected),
+            },
             "alarms": {
                 "detector": self._alarm_detector,
                 "fireActive": self._alarm_fire_active,
@@ -1577,6 +1679,11 @@ class HudServer:
                 fire_active = True
                 self._alarm_fire_active = True
                 self._alarm_fire_confidence = fire_last_confidence
+                self._external_haptics_buzz(
+                    side="both",
+                    duration_ms=max(200, min(500, int(self._external_haptics_fire_ms))),
+                    intensity=int(self._external_haptics_intensity),
+                )
                 await self._broadcast_events(
                     {"type": "alarm.fire", "state": "started", "confidence": fire_last_confidence, **self._current_direction_payload()}
                 )
@@ -1592,6 +1699,12 @@ class HudServer:
                 horn_active = True
                 self._alarm_horn_active = True
                 self._alarm_horn_confidence = horn_last_confidence
+                side = self._external_haptics_side(now)
+                self._external_haptics_buzz(
+                    side=side,
+                    duration_ms=max(200, min(500, int(self._external_haptics_horn_ms))),
+                    intensity=int(self._external_haptics_intensity),
+                )
                 await self._broadcast_events(
                     {
                         "type": "alarm.car_horn",
@@ -1757,6 +1870,11 @@ class HudServer:
                 self._alarm_fire_active = True
                 self._alarm_fire_confidence = fire_last_confidence
                 self._logger.info("YAMNet fire alarm started confidence=%.2f top=%s", fire_last_confidence, self._yamnet_last_top[:3])
+                self._external_haptics_buzz(
+                    side="both",
+                    duration_ms=max(200, min(500, int(self._external_haptics_fire_ms))),
+                    intensity=int(self._external_haptics_intensity),
+                )
                 await self._broadcast_events(
                     {"type": "alarm.fire", "state": "started", "confidence": fire_last_confidence, **self._current_direction_payload()}
                 )
@@ -1774,6 +1892,12 @@ class HudServer:
                 self._alarm_horn_active = True
                 self._alarm_horn_confidence = horn_last_confidence
                 self._logger.info("YAMNet car horn started confidence=%.2f top=%s", horn_last_confidence, self._yamnet_last_top[:3])
+                side = self._external_haptics_side(now)
+                self._external_haptics_buzz(
+                    side=side,
+                    duration_ms=max(200, min(500, int(self._external_haptics_horn_ms))),
+                    intensity=int(self._external_haptics_intensity),
+                )
                 await self._broadcast_events(
                     {
                         "type": "alarm.car_horn",
@@ -1797,6 +1921,11 @@ class HudServer:
                 self._alarm_siren_confidence = siren_last_confidence
                 self._logger.info(
                     "YAMNet siren started confidence=%.2f top=%s", siren_last_confidence, self._yamnet_last_top[:3]
+                )
+                self._external_haptics_buzz(
+                    side="both",
+                    duration_ms=max(200, min(500, int(self._external_haptics_fire_ms))),
+                    intensity=int(self._external_haptics_intensity),
                 )
                 await self._broadcast_events(
                     {"type": "alarm.siren", "state": "started", "confidence": siren_last_confidence, **self._current_direction_payload()}
@@ -1951,4 +2080,10 @@ class HudServer:
                     "text": normalized,
                     **self._current_direction_payload(),
                 }
+            )
+            side = self._external_haptics_side(now)
+            self._external_haptics_buzz(
+                side=side,
+                duration_ms=max(200, min(500, int(self._external_haptics_keyword_ms))),
+                intensity=int(self._external_haptics_intensity),
             )
