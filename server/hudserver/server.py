@@ -201,6 +201,10 @@ class HudServer:
         # Per-mic gain trims (use to compensate mismatched sensitivity, e.g. hot right mic).
         self._esp32_gain_left: float = float(os.environ.get("ESP32_GAIN_LEFT", "1.0"))
         self._esp32_gain_right: float = float(os.environ.get("ESP32_GAIN_RIGHT", "0.25"))
+        self._android_gain_left: float = float(os.environ.get("ANDROID_GAIN_LEFT", "1.0"))
+        self._android_gain_right: float = float(os.environ.get("ANDROID_GAIN_RIGHT", "1.0"))
+        self._android_gain_left = max(0.0, float(self._android_gain_left))
+        self._android_gain_right = max(0.0, float(self._android_gain_right))
 
         # Approximate mic geometry (mm) for 4-corner neckband layout:
         # - back edge is the phone (rear), front edge is the ESP32s (forward).
@@ -593,6 +597,12 @@ class HudServer:
                         self._esp32_gain_right = float(obj.get("esp32GainRight"))
                     self._esp32_gain_left = max(0.0, float(self._esp32_gain_left))
                     self._esp32_gain_right = max(0.0, float(self._esp32_gain_right))
+                    if obj.get("androidGainLeft") is not None:
+                        self._android_gain_left = float(obj.get("androidGainLeft"))
+                    if obj.get("androidGainRight") is not None:
+                        self._android_gain_right = float(obj.get("androidGainRight"))
+                    self._android_gain_left = max(0.0, float(self._android_gain_left))
+                    self._android_gain_right = max(0.0, float(self._android_gain_right))
                     if obj.get("hybridFrontBackGain") is not None:
                         self._hybrid_front_back_gain = float(obj.get("hybridFrontBackGain"))
                     if obj.get("hybridFrontGain") is not None:
@@ -760,6 +770,10 @@ class HudServer:
                         right = right[:n]
                         float_left = left.astype(np.float32) / np.float32(32768.0)
                         float_right = right.astype(np.float32) / np.float32(32768.0)
+                        gl = np.float32(max(0.0, float(self._android_gain_left)))
+                        gr = np.float32(max(0.0, float(self._android_gain_right)))
+                        float_left = np.clip(float_left * gl, -1.0, 1.0).astype(np.float32, copy=False)
+                        float_right = np.clip(float_right * gr, -1.0, 1.0).astype(np.float32, copy=False)
                         state.last_rms_left = float(np.sqrt(np.mean(float_left * float_left)))
                         state.last_rms_right = float(np.sqrt(np.mean(float_right * float_right)))
                         downmix = 0.5 * (float_left + float_right)
@@ -774,6 +788,8 @@ class HudServer:
                         frame_out = mono_i32.astype(np.int16).tobytes()
                     else:
                         float_pcm = pcm.astype(np.float32) / np.float32(32768.0)
+                        g = np.float32(max(0.0, float(0.5 * (float(self._android_gain_left) + float(self._android_gain_right)))))
+                        float_pcm = np.clip(float_pcm * g, -1.0, 1.0).astype(np.float32, copy=False)
                         state.last_rms = float(np.sqrt(np.mean(float_pcm * float_pcm)))
                         state.last_rms_left = state.last_rms
                         state.last_rms_right = state.last_rms
@@ -1106,6 +1122,8 @@ class HudServer:
                 "quadBackWeight": self._quad_back_weight,
                 "esp32GainLeft": self._esp32_gain_left,
                 "esp32GainRight": self._esp32_gain_right,
+                "androidGainLeft": self._android_gain_left,
+                "androidGainRight": self._android_gain_right,
             },
             "headPose": head_pose,
             "torsoPose": torso_pose,
